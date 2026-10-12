@@ -17,8 +17,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: yaap
-            defconfig: neptune_defconfig
           - target: oss
             defconfig: stock_defconfig
     steps:
