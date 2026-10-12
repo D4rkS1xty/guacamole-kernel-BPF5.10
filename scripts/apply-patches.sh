@@ -199,8 +199,45 @@ if grep -q 'sig_size > desc_size - sizeof(\*desc)' fs/verity/signature.c; then
   echo "tree fix: fs/verity/signature.c uses FS_VERITY_MAX_SIGNATURE_SIZE"
 fi
 
+# net/xfrm/xfrm_policy.c uses memset_after(), a helper that only exists in
+# newer kernels; add the 5.x definition (string.h here predates it).
+if ! grep -q 'define memset_after' include/linux/string.h; then
+  sed -i '$d' include/linux/string.h
+  cat >> include/linux/string.h <<'EOF'
+/**
+ * memset_after - Set the bytes after a given member of a struct to a given value
+ * @p: pointer to the struct
+ * @c: value to set
+ * @member: name of the member
+ */
+#define memset_after(p, c, member)					\
+({									\
+	typeof(*(p)) *__pf = (p);					\
+	memset((void *)__pf + offsetof(typeof(*__pf), member) +		\
+	       sizeof(__pf->member), c,					\
+	       sizeof(*__pf) - offsetof(typeof(*__pf), member) -		\
+	       sizeof(__pf->member));					\
+	__pf;								\
+})
+
+#endif /* _LINUX_STRING_H_ */
+EOF
+  echo "tree fix: added memset_after() to include/linux/string.h"
+fi
+
+# drivers/soc/qcom/subsystem_restart.c calls __getnstimeofday64(), which was
+# removed from this tree's timekeeping; use the public ktime_get_real_ts64().
+if grep -q '__getnstimeofday64' drivers/soc/qcom/subsystem_restart.c; then
+  perl -0777 -i -pe 's/__getnstimeofday64\(&tspec\)/ktime_get_real_ts64(&tspec)/g' \
+    drivers/soc/qcom/subsystem_restart.c
+  grep -q 'linux/timekeeping.h' drivers/soc/qcom/subsystem_restart.c || \
+    sed -i 's|#include <linux/time.h>|#include <linux/time.h>\n#include <linux/timekeeping.h>|' \
+      drivers/soc/qcom/subsystem_restart.c
+  echo "tree fix: subsystem_restart.c uses ktime_get_real_ts64()"
+fi
+
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
