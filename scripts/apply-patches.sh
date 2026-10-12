@@ -1,20 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+on_err() {
+  local rc=$?
+  echo "::error::apply-patches.sh failed (rc=$rc) at line ${LINENO}: ${BASH_COMMAND}"
+}
+trap 'on_err' ERR
+
 : "${DEFCONFIG:?DEFCONFIG is not set}"
 ROOT="${GITHUB_WORKSPACE:-$PWD}"
 cd "$ROOT/kernel"
 
-git config user.email "ci@localhost"
-git config user.name "guacamole-builder"
+git config --global user.email "ci@localhost"
+git config --global user.name "guacamole-builder"
+git config --global advice.detachedHead false
 
 # ---------------------------------------------------------------------------
 # 1) KernelSU-Next (legacy / non-GKI integration)
 # ---------------------------------------------------------------------------
 echo "::group::KernelSU-Next legacy setup"
-curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
+KSU_URL="https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh"
+LOG="$(mktemp)"
+curl -fLSs "$KSU_URL" -o /tmp/ksu-setup.sh
+set +e
+bash /tmp/ksu-setup.sh legacy 2>&1 | tee "$LOG"
+KSU_RC=${PIPESTATUS[0]}
+set -e
+if [ "$KSU_RC" -ne 0 ]; then
+  echo "::error::KernelSU-Next setup failed (rc=$KSU_RC). Last log lines:"
+  tail -n 60 "$LOG" | sed 's/^/  /' | while IFS= read -r line; do echo "::error::ksu: $line"; done
+  exit 1
+fi
+echo "KernelSU-Next setup OK"
 git add -A
-git commit -q -m "Add KernelSU-Next"
+git commit -q -m "Add KernelSU-Next" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
@@ -35,7 +54,7 @@ if (
   patch -p1 < "$SUSFS/kernel_patches/50_add_susfs_in_kernel-4.14.patch"
 ); then
   git add -A
-  git commit -q -m "Add SUSFS"
+  git commit -q -m "Add SUSFS" || true
   echo "SUSFS applied"
 else
   echo "::warning::SUSFS patch did not apply cleanly - building WITHOUT SUSFS"
@@ -49,7 +68,7 @@ echo "::endgroup::"
 # ---------------------------------------------------------------------------
 echo "::group::defconfig tweaks ($DEFCONFIG)"
 CFG="arch/arm64/configs/$DEFCONFIG"
-[ -f "$CFG" ] || { echo "defconfig $CFG not found"; exit 1; }
+[ -f "$CFG" ] || { echo "::error::defconfig $CFG not found"; exit 1; }
 
 cat >> "$CFG" <<'EOF'
 
