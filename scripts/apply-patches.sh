@@ -148,14 +148,13 @@ if ! grep -q 'trace/events/sched.h' kernel/sched/fair.c; then
   echo "tree fix: restored #include <trace/events/sched.h> in kernel/sched/fair.c"
 fi
 
-# mm/slub.c defines count_free()/node_nr_objs() under CONFIG_SLUB_DEBUG only,
-# but get_slabinfo() (CONFIG_SLABINFO) uses them. stock sets CONFIG_SLABINFO=y
-# with CONFIG_SLUB_DEBUG unset -> undeclared. Make the helpers available for
-# SLABINFO too (they only touch page->objects/inuse and n->total_objects).
-if ! grep -q 'CONFIG_SLUB_DEBUG) || defined(CONFIG_SLABINFO)' mm/slub.c; then
-  perl -0777 -i -pe 's/#ifdef CONFIG_SLUB_DEBUG\n(static int count_free\(struct page \*page\))/#if defined(CONFIG_SLUB_DEBUG) || defined(CONFIG_SLABINFO)\n$1/' \
-    mm/slub.c
-  echo "tree fix: mm/slub.c count_free/node_nr_objs available for CONFIG_SLABINFO"
+# include/linux/sched.h (struct task_struct) is missing irq_config, which
+# include/linux/irqflags.h's lockdep_hrtimer_enter()/exit() write under
+# CONFIG_TRACE_IRQFLAGS (enabled by stock) -> "no member named 'irq_config'".
+if ! grep -q 'irq_config' include/linux/sched.h; then
+  perl -0777 -i -pe 's/(\tint\t+softirq_context;\n)/$1\tint\t\t\t\tirq_config;\n/' \
+    include/linux/sched.h
+  echo "tree fix: added irq_config to struct task_struct"
 fi
 
 # net/packet/af_packet.c is a vendor variant that uses the OpenWrt
@@ -183,7 +182,7 @@ if ! grep -q 'XT_OWNER_SUPPL_GROUPS' include/uapi/linux/netfilter/xt_owner.h; th
 fi
 
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/slub/packet/xt_owner)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
@@ -258,6 +257,13 @@ CONFIG_PRIME_CPU_MASK=128
 # --- Disable the Smack LSM: it still uses the pre-kern_ipc_perm IPC hook
 #     signatures and otherwise fails to compile (only enabled in stock). ---
 # CONFIG_SECURITY_SMACK is not set
+
+# --- Features whose kernel code is inconsistent in this WIP branch; disable
+#     so stock_defconfig builds. /proc/slabinfo needs CONFIG_SLUB_DEBUG's
+#     total_objects (mm/slab.h); incfs verity expects a newer fsverity API. ---
+# CONFIG_SLABINFO is not set
+# CONFIG_SLAB_STAT_DEBUG is not set
+# CONFIG_INCREMENTAL_FS is not set
 
 # --- SELinux: permissive by default ---
 CONFIG_SECURITY_SELINUX_BOOTPARAM=y
