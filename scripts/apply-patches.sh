@@ -50,6 +50,33 @@ else
 fi
 git add -A
 git commit -q -m "tree fix: add KMSG_DUMP_MAX to kmsg_dump.h" || true
+
+# The WIP branch half-applied the upstream "struct kern_ipc_perm" LSM rework:
+# lsm_hooks.h, security/security.c and SELinux use struct kern_ipc_perm *, but
+# include/linux/security.h and ipc/{msg,shm,sem}.c keep the old
+# msg_queue/shmid_kernel/sem_array types -> "conflicting types" build errors.
+if grep -q 'struct msg_queue \*msq' include/linux/security.h; then
+  sed -i \
+    -e 's/struct msg_queue \*msq/struct kern_ipc_perm *msq/g' \
+    -e 's/struct shmid_kernel \*shp/struct kern_ipc_perm *shp/g' \
+    -e 's/struct sem_array \*sma/struct kern_ipc_perm *sma/g' \
+    include/linux/security.h
+  echo "tree fix: converted include/linux/security.h IPC hooks to kern_ipc_perm"
+fi
+if grep -q 'security_msg_queue_alloc(msq)' ipc/msg.c; then
+  sed -i 's/\(security_msg_queue_[a-z_]*\)(msq/\1(\&msq->q_perm/g' ipc/msg.c
+  echo "tree fix: ipc/msg.c -> &msq->q_perm"
+fi
+if grep -q 'security_shm_alloc(shp)' ipc/shm.c; then
+  sed -i 's/\(security_shm_[a-z_]*\)(shp/\1(\&shp->shm_perm/g' ipc/shm.c
+  echo "tree fix: ipc/shm.c -> &shp->shm_perm"
+fi
+if grep -q 'security_sem_alloc(sma)' ipc/sem.c; then
+  sed -i 's/\(security_sem_[a-z_]*\)(sma/\1(\&sma->sem_perm/g' ipc/sem.c
+  echo "tree fix: ipc/sem.c -> &sma->sem_perm"
+fi
+git add -A
+git commit -q -m "tree fix: complete kern_ipc_perm LSM conversion in security.h + ipc/" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
@@ -118,6 +145,11 @@ CONFIG_KSU_KPROBE_HOOKS=y
 # --- SoC / sched symbols missing from some defconfigs ---
 CONFIG_LITTLE_CPU_MASK=15
 CONFIG_BIG_CPU_MASK=112
+CONFIG_PRIME_CPU_MASK=128
+
+# --- Disable the Smack LSM: it still uses the pre-kern_ipc_perm IPC hook
+#     signatures and otherwise fails to compile (only enabled in stock). ---
+# CONFIG_SECURITY_SMACK is not set
 
 # --- SUSFS ---
 CONFIG_KSU_SUSFS=y
