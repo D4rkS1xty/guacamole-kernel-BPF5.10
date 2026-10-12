@@ -137,8 +137,53 @@ if grep -q 'ERRATA_MIDR_RANGE(MIDR_KRYO4G,' arch/arm64/kernel/cpu_errata.c; then
   echo "tree fix: cpu_errata ERRATA_MIDR_RANGE(MIDR_KRYO4G) -> ERRATA_MIDR_REV_RANGE"
 fi
 
+# kernel/sched/fair.c lost upstream's "#include <trace/events/sched.h>".
+# check_schedstat_required() references trace_sched_stat_{wait,sleep,iowait,
+# blocked,runtime}_enabled() under CONFIG_SCHEDSTATS; without the include those
+# static inline accessors are undeclared -> -Werror=implicit-function-declaration.
+# Only built by stock (which sets CONFIG_SCHEDSTATS=y). Restore the include.
+if ! grep -q 'trace/events/sched.h' kernel/sched/fair.c; then
+  perl -0777 -i -pe 's/(#include <linux\/rbtree_augmented\.h>\n)/$1#include <trace\/events\/sched.h>\n/' \
+    kernel/sched/fair.c
+  echo "tree fix: restored #include <trace/events/sched.h> in kernel/sched/fair.c"
+fi
+
+# mm/slub.c defines count_free()/node_nr_objs() under CONFIG_SLUB_DEBUG only,
+# but get_slabinfo() (CONFIG_SLABINFO) uses them. stock sets CONFIG_SLABINFO=y
+# with CONFIG_SLUB_DEBUG unset -> undeclared. Make the helpers available for
+# SLABINFO too (they only touch page->objects/inuse and n->total_objects).
+if ! grep -q 'CONFIG_SLUB_DEBUG) || defined(CONFIG_SLABINFO)' mm/slub.c; then
+  perl -0777 -i -pe 's/#ifdef CONFIG_SLUB_DEBUG\n(static int count_free\(struct page \*page\))/#if defined(CONFIG_SLUB_DEBUG) || defined(CONFIG_SLABINFO)\n$1/' \
+    mm/slub.c
+  echo "tree fix: mm/slub.c count_free/node_nr_objs available for CONFIG_SLABINFO"
+fi
+
+# net/packet/af_packet.c is a vendor variant that uses the OpenWrt
+# "packet_socket_type" option (PACKET_RECV_TYPE + PACKET_MASK_ANY), but the
+# UAPI header was not updated -> undeclared identifiers. Values from
+# openwrt pending-4.14/630-packet_socket_type.patch (4.14 has no
+# PACKET_IGNORE_OUTGOING, so PACKET_RECV_TYPE is 23).
+if ! grep -q 'PACKET_MASK_ANY' include/uapi/linux/if_packet.h; then
+  perl -0777 -i -pe 's/(#define PACKET_FASTROUTE[^\n]*\n)/$1#define PACKET_MASK_ANY\t\t0xffffffff\t\/* mask for packet type bits *\/\n/' \
+    include/uapi/linux/if_packet.h
+  echo "tree fix: added PACKET_MASK_ANY to include/uapi/linux/if_packet.h"
+fi
+if ! grep -q 'PACKET_RECV_TYPE' include/uapi/linux/if_packet.h; then
+  perl -0777 -i -pe 's/(#define PACKET_FANOUT_DATA[^\n]*\n)/$1#define PACKET_RECV_TYPE\t\t23\n/' \
+    include/uapi/linux/if_packet.h
+  echo "tree fix: added PACKET_RECV_TYPE to include/uapi/linux/if_packet.h"
+fi
+
+# net/netfilter/xt_owner.c is a backported version whose check() uses
+# XT_OWNER_SUPPL_GROUPS, but the UAPI enum lacks it -> undeclared.
+if ! grep -q 'XT_OWNER_SUPPL_GROUPS' include/uapi/linux/netfilter/xt_owner.h; then
+  perl -0777 -i -pe 's/(\tXT_OWNER_SOCKET = 1 << 2,\n)/$1\tXT_OWNER_SUPPL_GROUPS = 1 << 3,\n/' \
+    include/uapi/linux/netfilter/xt_owner.h
+  echo "tree fix: added XT_OWNER_SUPPL_GROUPS to xt_owner.h"
+fi
+
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/slub/packet/xt_owner)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
