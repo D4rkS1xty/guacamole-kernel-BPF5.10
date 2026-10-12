@@ -77,6 +77,62 @@ if grep -q 'security_sem_alloc(sma)' ipc/sem.c; then
 fi
 git add -A
 git commit -q -m "tree fix: complete kern_ipc_perm LSM conversion in security.h + ipc/" || true
+
+# net/core/filter.c (BPF backport) uses sizeof_field(); that macro is missing
+# from this 4.14 tree's include/linux/stddef.h.
+if ! grep -q 'define sizeof_field' include/linux/stddef.h; then
+  awk '{ if ($0=="#endif" && !done) { print "#define sizeof_field(TYPE, MEMBER) sizeof((((TYPE *)0)->MEMBER))"; done=1 } print }' \
+    include/linux/stddef.h > include/linux/stddef.h.tmp
+  mv include/linux/stddef.h.tmp include/linux/stddef.h
+  echo "tree fix: added sizeof_field to include/linux/stddef.h"
+fi
+
+# net/core/filter.c (BPF backport) calls skb_increase/decrease_gso_size(),
+# helpers that were never added to include/linux/skbuff.h.
+if ! grep -q 'skb_increase_gso_size' include/linux/skbuff.h; then
+  awk '
+    /^struct skb_shared_info \{/ { ins=1 }
+    { print }
+    ins && /^\};$/ && !done {
+      print "static inline void skb_increase_gso_size(struct skb_shared_info *shinfo,"
+      print "\t\t\t\t\t u16 increment)"
+      print "{"
+      print "\tif (WARN_ON_ONCE(shinfo->gso_size == GSO_BY_FRAGS))"
+      print "\t\treturn;"
+      print "\tshinfo->gso_size += increment;"
+      print "}"
+      print ""
+      print "static inline void skb_decrease_gso_size(struct skb_shared_info *shinfo,"
+      print "\t\t\t\t\t u16 decrement)"
+      print "{"
+      print "\tif (WARN_ON_ONCE(shinfo->gso_size == GSO_BY_FRAGS))"
+      print "\t\treturn;"
+      print "\tshinfo->gso_size -= decrement;"
+      print "}"
+      done=1; ins=0
+    }
+  ' include/linux/skbuff.h > include/linux/skbuff.h.tmp
+  mv include/linux/skbuff.h.tmp include/linux/skbuff.h
+  echo "tree fix: added skb_increase/decrease_gso_size to include/linux/skbuff.h"
+fi
+
+# lib/lz4/lz4_decompress.c EXPORT_SYMBOLs reference a stale 'armv8' name while
+# the functions are actually named 'arm64'.
+if grep -q 'LZ4_armv8_' lib/lz4/lz4_decompress.c; then
+  sed -i 's/LZ4_armv8_/LZ4_arm64_/g' lib/lz4/lz4_decompress.c
+  echo "tree fix: lz4 armv8 -> arm64 EXPORT_SYMBOL"
+fi
+
+# arch/arm64/include/asm/lse.h: with CONFIG_ARM64_LSE_ATOMICS disabled the
+# #else branch never defines ARM64_LSE_ATOMIC_INSN, but cmpxchg.h always uses
+# it -> "expected string literal in 'asm'". Define the pass-through variant.
+if ! grep -q 'compat: pass-through' arch/arm64/include/asm/lse.h; then
+  sed -i '/#define __LL_SC_EXPORT(x)/a\
+#define ARM64_LSE_ATOMIC_INSN(lse)	lse /* compat: pass-through for !LSE */' arch/arm64/include/asm/lse.h
+  echo "tree fix: define ARM64_LSE_ATOMIC_INSN for !LSE builds"
+fi
+git add -A
+git commit -q -m "tree fix: sizeof_field, gso size helpers, lz4 arm64 exports, lse.h !LSE" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
