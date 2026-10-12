@@ -301,6 +301,14 @@ if ! grep -q 'bool reinit_uhs = host->reinit_uhs' drivers/mmc/host/sdhci.c; then
   echo "tree fix: restored sdhci_set_ios locals"
 fi
 
+# drivers/mmc/host/sdhci-msm.c calls atomic_set() on the plain unsigned long
+# pm_qos_request::cpus_affine bitmask; assign it directly instead.
+if grep -q 'atomic_set(&msm_host->pm_qos_irq.req.cpus_affine' drivers/mmc/host/sdhci-msm.c; then
+  perl -0777 -i -pe 's/atomic_set\(&(msm_host->pm_qos_irq\.req|group->req)\.cpus_affine,\s*\n\s*(\*cpumask_bits\([^\n]*\))\);/$1.cpus_affine = $2;/g' \
+    drivers/mmc/host/sdhci-msm.c
+  echo "tree fix: sdhci-msm.c cpus_affine direct assignment"
+fi
+
 # lib/zstd links zstd_common.o only when CONFIG_ZSTD_COMMON is set, but this
 # tree's Kconfig never selects it for COMPRESS/DECOMPRESS, leaving ZSTD_*/HUF_*/
 # FSE_* symbols unresolved at vmlinux link; select it from both.
@@ -319,7 +327,7 @@ if ! grep -q '#ifdef CONFIG_CPU_INPUT_BOOST' kernel/fork.c; then
 fi
 
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/zstd-common/boost-guard)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/sdhci-msm-affine/zstd-common/boost-guard)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
