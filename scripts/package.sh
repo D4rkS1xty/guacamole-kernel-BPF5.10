@@ -3,25 +3,36 @@ set -euo pipefail
 
 : "${TARGET:?TARGET is not set}"
 ROOT="${GITHUB_WORKSPACE:-$PWD}"
-OUT="$ROOT/out"
-IMG="$OUT/arch/arm64/boot/Image.gz"
-IMGDTB="$OUT/arch/arm64/boot/Image.gz-dtb"
+BOOT="$ROOT/kernel/arch/arm64/boot"
 DIST="$ROOT/dist"
 AK="$ROOT/anykernel"
 
 mkdir -p "$DIST"
 rm -rf "$AK"
-git clone --depth=1 https://github.com/KernelSU-Next/AnyKernel3.git "$AK"
+git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git "$AK"
 rm -rf "$AK/.git"
 
-if [ -f "$IMGDTB" ]; then
-  cp "$IMGDTB" "$AK/Image.gz-dtb"
-elif [ -f "$IMG" ]; then
-  cp "$IMG" "$AK/Image.gz"
-  find "$OUT/arch/arm64/boot/dts" -name '*.dtb' -exec cat {} + > "$AK/dtb"
+if [ -f "$BOOT/Image.gz-dtb" ]; then
+  cp "$BOOT/Image.gz-dtb" "$AK/Image.gz-dtb"
+elif [ -f "$BOOT/Image.gz" ]; then
+  cp "$BOOT/Image.gz" "$AK/Image.gz"
+  find "$BOOT/dts" -name '*.dtb' -exec cat {} + > "$AK/dtb" 2>/dev/null || true
+elif [ -f "$BOOT/Image" ]; then
+  gzip -9 -c "$BOOT/Image" > "$AK/Image.gz"
+  find "$BOOT/dts" -name '*.dtb' -exec cat {} + > "$AK/dtb" 2>/dev/null || true
 else
-  echo "No kernel image found (looked for Image.gz-dtb and Image.gz)"
+  echo "::error::No kernel image found under $BOOT"
+  ls -l "$BOOT" || true
   exit 1
+fi
+
+if [ -f "$AK/anykernel.sh" ]; then
+  sed -i -E 's|^kernel\.string=.*|kernel.string=guacamole KernelSU-Next|' "$AK/anykernel.sh"
+  sed -i -E 's|^do\.modules=.*|do.modules=0|' "$AK/anykernel.sh"
+  sed -i -E 's|^device\.name1=.*|device.name1=OnePlus7Pro|' "$AK/anykernel.sh"
+  sed -i -E 's|^device\.name2=.*|device.name2=guacamole|' "$AK/anykernel.sh"
+  for n in 3 4 5; do sed -i -E "s|^device\.name${n}=.*|device.name${n}=|" "$AK/anykernel.sh"; done
+  sed -i -E 's|^BLOCK=.*|BLOCK=boot;|' "$AK/anykernel.sh"
 fi
 
 STAMP="$(date +%Y%m%d-%H%M)"
