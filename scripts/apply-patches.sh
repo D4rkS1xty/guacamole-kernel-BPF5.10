@@ -269,8 +269,42 @@ EOF
   echo "tree fix: restored bio_alloc_pages()"
 fi
 
+# net/ipv4/tcp_cong.c uses CONFIG_DEFAULT_TCP_CONG unconditionally, but this
+# tree's Kconfig leaves the symbol without a prompt, so it is undefined unless a
+# DEFAULT_* option happens to be enabled; give it an unconditional fallback.
+if ! grep -q 'default "cubic"$' net/ipv4/Kconfig; then
+  perl -0777 -i -pe 's{(\tdefault "bbr2" if DEFAULT_BBR2\n)}{$1\tdefault "cubic"\n}s' \
+    net/ipv4/Kconfig
+  echo "tree fix: DEFAULT_TCP_CONG fallback default"
+fi
+
+# drivers/mmc/core/host.c calls mmc_validate_host_caps(), whose definition is
+# missing from this WIP tree; add the upstream helper.
+if ! grep -q 'mmc_validate_host_caps(struct mmc_host' drivers/mmc/core/host.c; then
+  perl -0777 -i -pe 's{(static struct attribute_group dev_attr_grp = \{\n\t\.attrs = dev_attrs,\n\};\n)}{$1\nstatic int mmc_validate_host_caps(struct mmc_host *host)\n{\n\tif (host->caps \& MMC_CAP_SDIO_IRQ \&\& !host->ops->enable_sdio_irq) {\n\t\tdev_warn(host->parent, "MMC_CAP_SDIO_IRQ is supported, but enable_sdio_irq is not implemented\\n");\n\t\treturn -EINVAL;\n\t}\n\n\treturn 0;\n}\n}s' \
+    drivers/mmc/core/host.c
+  echo "tree fix: added mmc_validate_host_caps()"
+fi
+
+# lib/zstd links zstd_common.o only when CONFIG_ZSTD_COMMON is set, but this
+# tree's Kconfig never selects it for COMPRESS/DECOMPRESS, leaving ZSTD_*/HUF_*/
+# FSE_* symbols unresolved at vmlinux link; select it from both.
+if ! grep -q 'select ZSTD_COMMON' lib/Kconfig; then
+  perl -0777 -i -pe 's{(config ZSTD_COMPRESS\n\tselect XXHASH\n)}{$1\tselect ZSTD_COMMON\n}s' lib/Kconfig
+  perl -0777 -i -pe 's{(config ZSTD_DECOMPRESS\n\tselect XXHASH\n)}{$1\tselect ZSTD_COMMON\n}s' lib/Kconfig
+  echo "tree fix: ZSTD_COMPRESS/DECOMPRESS select ZSTD_COMMON"
+fi
+
+# kernel/fork.c unconditionally pokes the input-boost driver (last_mb_time,
+# cpu_input_boost_kick_max), which only exists when CONFIG_CPU_INPUT_BOOST is on.
+if ! grep -q '#ifdef CONFIG_CPU_INPUT_BOOST' kernel/fork.c; then
+  perl -0777 -i -pe 's{(\t/\* Boost DDR bus to the max for 500 ms when userspace launches an app \*/\n\tif \(task_is_zygote\(current\)\) \{\n.*?\n\t\}\n)}{#ifdef CONFIG_CPU_INPUT_BOOST\n$1#endif\n}s' \
+    kernel/fork.c
+  echo "tree fix: guarded fork.c input-boost block"
+fi
+
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/zstd-common/boost-guard)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
