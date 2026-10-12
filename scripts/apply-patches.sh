@@ -237,32 +237,11 @@ if grep -q '__getnstimeofday64' drivers/soc/qcom/subsystem_restart.c; then
 fi
 
 # kernel/sched/debug.c calls cfs_rq_of(&p->se), but cfs_rq_of() only exists as
-# a static inline in fair.c; move it into sched.h so debug.c can see it.
-if ! grep -q 'cfs_rq_of(struct sched_entity \*se)' kernel/sched/sched.h; then
-  cat > /tmp/cfsrq_of.h <<'EOF'
-
-#ifdef CONFIG_FAIR_GROUP_SCHED
-static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
-{
-	return se->cfs_rq;
-}
-#else
-static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
-{
-	struct task_struct *p = container_of(se, struct task_struct, se);
-	struct rq *rq = task_rq(p);
-
-	return &rq->cfs;
-}
-#endif
-EOF
-  sed -i '/extern int entity_eligible(struct cfs_rq \*cfs_rq, struct sched_entity \*se);/r /tmp/cfsrq_of.h' \
-    kernel/sched/sched.h
-  perl -0777 -i -pe 's{/\* runqueue on which this entity is \(to be\) queued \*/\nstatic inline struct cfs_rq \*cfs_rq_of\(struct sched_entity \*se\)\n\{\n\treturn se->cfs_rq;\n\}\n}{}s' \
-    kernel/sched/fair.c
-  perl -0777 -i -pe 's{static inline struct cfs_rq \*cfs_rq_of\(struct sched_entity \*se\)\n\{\n\tstruct task_struct \*p = task_of\(se\);\n\tstruct rq \*rq = task_rq\(p\);\n\n\treturn &rq->cfs;\n\}\n}{}s' \
-    kernel/sched/fair.c
-  echo "tree fix: moved cfs_rq_of() into kernel/sched/sched.h"
+# a static inline in fair.c; add the same helper directly to debug.c.
+if ! grep -q 'cfs_rq_of(struct sched_entity \*se)' kernel/sched/debug.c; then
+  perl -0777 -i -pe 's{(#include "sched.h"\n)}{$1\n#ifdef CONFIG_FAIR_GROUP_SCHED\nstatic inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)\n{\n\treturn se->cfs_rq;\n}\n#else\nstatic inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)\n{\n\tstruct task_struct *p = container_of(se, struct task_struct, se);\n\tstruct rq *rq = task_rq(p);\n\n\treturn &rq->cfs;\n}\n#endif\n}s' \
+    kernel/sched/debug.c
+  echo "tree fix: added cfs_rq_of() to kernel/sched/debug.c"
 fi
 
 # drivers/block/vs_block_server.c calls bio_alloc_pages(), removed from this
