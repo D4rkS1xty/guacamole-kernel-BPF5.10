@@ -42,9 +42,19 @@ echo "::endgroup::"
 echo "::group::SUSFS (kernel-4.14)"
 SUSFS=/tmp/susfs4ksu
 rm -rf "$SUSFS"
-git clone --depth=1 -b kernel-4.14 https://gitlab.com/simonpunk/susfs4ksu.git "$SUSFS"
+SUSFS_OK=0
+for remote in \
+  https://github.com/Star-Seven/susfs4ksu.git \
+  https://github.com/ShirkNeko/susfs4ksu.git \
+  https://github.com/kutemeikito/susfs4ksu.git ; do
+  echo "Trying SUSFS source: $remote"
+  if git clone --depth=1 -b kernel-4.14 "$remote" "$SUSFS"; then SUSFS_OK=1; break; fi
+  rm -rf "$SUSFS"
+done
 
-if (
+if [ "$SUSFS_OK" -ne 1 ]; then
+  echo "::warning::could not fetch SUSFS from any mirror - building WITHOUT SUSFS"
+elif (
   set -e
   cp "$SUSFS"/kernel_patches/include/linux/*.h include/linux/
   cp "$SUSFS"/kernel_patches/fs/*.c fs/
