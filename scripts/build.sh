@@ -49,6 +49,8 @@ echo "::endgroup::"
 {
   echo "===== make $DEFCONFIG ====="
   "${MAKE[@]}" "$DEFCONFIG"
+  echo "===== make olddefconfig ====="
+  "${MAKE[@]}" olddefconfig
   echo "===== make -j$(nproc) ====="
   "${MAKE[@]}" -j"$(nproc)"
 } 2>&1 | tee "$LOG"
