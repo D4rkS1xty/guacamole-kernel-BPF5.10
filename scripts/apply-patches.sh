@@ -361,6 +361,21 @@ if grep -q 'migrate_disable();' drivers/soc/qcom/watchdog_v2.c; then
   echo "tree fix: watchdog_v2.c migrate_disable/enable -> preempt_disable/enable"
 fi
 
+# drivers/staging/android/ion/ion.c defines ion_alloc_dmabuf() but exports
+# nothing (this Sultan-ion rewrite dropped the EXPORT_SYMBOL that CAF's was
+# built with). stock_defconfig builds CONFIG_DVB_MPQ_DEMUX=m
+# (mpq-dmx-hw-plugin.ko, which calls ion_alloc()) so the module stage fails
+# MODPOST with an undefined symbol. neptune_defconfig builds no DVB module at
+# all, which is why the yaap job never hit this. Export it.
+if [ -f drivers/staging/android/ion/ion.c ] && \
+   ! grep -q 'EXPORT_SYMBOL(ion_alloc_dmabuf)' drivers/staging/android/ion/ion.c; then
+  grep -q '#include <linux/export.h>' drivers/staging/android/ion/ion.c || \
+    perl -0777 -i -pe 's{(#include <linux/miscdevice\.h>\n)}{$1#include <linux/export.h>\n}' \
+      drivers/staging/android/ion/ion.c
+  printf '\nEXPORT_SYMBOL(ion_alloc_dmabuf);\n' >> drivers/staging/android/ion/ion.c
+  echo "tree fix: exported ion_alloc_dmabuf for DVB_MPQ_DEMUX module"
+fi
+
 git add -A
 git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/sdhci-msm-affine/smb5-passthrough/zstd-common/boost-guard)" || true
 echo "::endgroup::"
