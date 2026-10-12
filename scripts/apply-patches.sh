@@ -52,6 +52,7 @@ for remote in \
   rm -rf "$SUSFS"
 done
 
+SUSFS_APPLY_LOG="${RUNNER_TEMP:-/tmp}/susfs-apply.log"
 if [ "$SUSFS_OK" -ne 1 ]; then
   echo "::warning::could not fetch SUSFS from any mirror - building WITHOUT SUSFS"
 elif (
@@ -62,12 +63,19 @@ elif (
   [ -d "$KSUDIR" ] || KSUDIR="KernelSU"
   ( cd "$KSUDIR" && patch -p1 < "$SUSFS/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" )
   patch -p1 < "$SUSFS/kernel_patches/50_add_susfs_in_kernel-4.14.patch"
-); then
+) > "$SUSFS_APPLY_LOG" 2>&1; then
   git add -A
   git commit -q -m "Add SUSFS" || true
   echo "SUSFS applied"
 else
   echo "::warning::SUSFS patch did not apply cleanly - building WITHOUT SUSFS"
+  {
+    echo ""
+    echo "### SUSFS patch failure (see below)"
+    echo '```'
+    tail -n 80 "$SUSFS_APPLY_LOG" 2>/dev/null || true
+    echo '```'
+  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
   git checkout -- .
   git clean -fd include/linux fs >/dev/null 2>&1 || true
 fi
