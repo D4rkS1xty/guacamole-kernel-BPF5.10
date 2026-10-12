@@ -309,6 +309,15 @@ if grep -q 'atomic_set(&msm_host->pm_qos_irq.req.cpus_affine' drivers/mmc/host/s
   echo "tree fix: sdhci-msm.c cpus_affine direct assignment"
 fi
 
+# smb5-lib.c includes <linux/passthroughhack.h> only when
+# CONFIG_OP_PASSTHROUGH_HACK is set, but references passthrough_hack
+# unconditionally; guard the reference the same way (neptune sets it, stock not).
+if [ "$(grep -c '#ifdef CONFIG_OP_PASSTHROUGH_HACK' drivers/power/supply/qcom/smb5-lib.c)" = "1" ]; then
+  perl -0777 -i -pe 's{(\tif \(passthrough_hack > 0\)\n\t\treturn;\n)}{#ifdef CONFIG_OP_PASSTHROUGH_HACK\n$1#endif\n}s' \
+    drivers/power/supply/qcom/smb5-lib.c
+  echo "tree fix: guarded smb5-lib.c passthrough_hack reference"
+fi
+
 # lib/zstd links zstd_common.o only when CONFIG_ZSTD_COMMON is set, but this
 # tree's Kconfig never selects it for COMPRESS/DECOMPRESS, leaving ZSTD_*/HUF_*/
 # FSE_* symbols unresolved at vmlinux link; select it from both.
@@ -327,7 +336,7 @@ if ! grep -q '#ifdef CONFIG_CPU_INPUT_BOOST' kernel/fork.c; then
 fi
 
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/sdhci-msm-affine/zstd-common/boost-guard)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/sdhci-msm-affine/smb5-passthrough/zstd-common/boost-guard)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
