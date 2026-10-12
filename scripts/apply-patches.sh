@@ -286,6 +286,21 @@ if ! grep -q 'mmc_validate_host_caps(struct mmc_host' drivers/mmc/core/host.c; t
   echo "tree fix: added mmc_validate_host_caps()"
 fi
 
+# drivers/mmc/host/sdhci.c lost its sdhci_set_ios() locals and the preset-value
+# helpers in this WIP tree (only reachable when CONFIG_MMC_SDHCI is enabled,
+# i.e. stock_defconfig); restore them from upstream.
+if ! grep -q 'sdhci_timing_has_preset' drivers/mmc/host/sdhci.c; then
+  perl -0777 -i -pe 's{(EXPORT_SYMBOL\(sdhci_cfg_irq\);\n\n)(void sdhci_set_ios\(struct mmc_host \*mmc, struct mmc_ios \*ios\)\n)}{$1static bool sdhci_timing_has_preset(unsigned char timing)\n{\n\tswitch (timing) {\n\tcase MMC_TIMING_UHS_SDR12:\n\tcase MMC_TIMING_UHS_SDR25:\n\tcase MMC_TIMING_UHS_SDR50:\n\tcase MMC_TIMING_UHS_SDR104:\n\tcase MMC_TIMING_UHS_DDR50:\n\tcase MMC_TIMING_MMC_HS:\n\tcase MMC_TIMING_MMC_DDR52:\n\tcase MMC_TIMING_MMC_HS200:\n\tcase MMC_TIMING_MMC_HS400:\n\t\treturn true;\n\tdefault:\n\t\treturn false;\n\t}\n}\n\nstatic bool sdhci_preset_needed(struct sdhci_host *host, unsigned char timing)\n{\n\treturn !(host->quirks2 \& SDHCI_QUIRK2_PRESET_VALUE_BROKEN) \&\&\n\t       sdhci_timing_has_preset(timing);\n}\n\nstatic bool sdhci_presetable_values_change(struct sdhci_host *host, struct mmc_ios *ios)\n{\n\t/*\n\t * Preset Values are: Driver Strength, Clock Generator and SDCLK/RCLK\n\t * Frequency. Check if preset values need to be enabled, or the Driver\n\t * Strength needs updating. Clock changes are handled separately.\n\t */\n\treturn !host->preset_enabled \&\&\n\t       (sdhci_preset_needed(host, ios->timing) ||\n\t\thost->drv_type != ios->drv_type);\n}\n\n$2}s' \
+    drivers/mmc/host/sdhci.c
+  echo "tree fix: restored sdhci preset-value helpers"
+fi
+
+if ! grep -q 'bool reinit_uhs = host->reinit_uhs' drivers/mmc/host/sdhci.c; then
+  perl -0777 -i -pe 's{\tu8 ctrl;\n\tint ret;\n\n\thost->reinit_uhs = false;\n\n\thost->reinit_uhs = false;\n}{\tu8 ctrl;\n\tbool reinit_uhs = host->reinit_uhs;\n\tbool turning_on_clk = false;\n\tint ret;\n\n\thost->reinit_uhs = false;\n}s' \
+    drivers/mmc/host/sdhci.c
+  echo "tree fix: restored sdhci_set_ios locals"
+fi
+
 # lib/zstd links zstd_common.o only when CONFIG_ZSTD_COMMON is set, but this
 # tree's Kconfig never selects it for COMPRESS/DECOMPRESS, leaving ZSTD_*/HUF_*/
 # FSE_* symbols unresolved at vmlinux link; select it from both.
@@ -304,7 +319,7 @@ if ! grep -q '#ifdef CONFIG_CPU_INPUT_BOOST' kernel/fork.c; then
 fi
 
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/zstd-common/boost-guard)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/zstd-common/boost-guard)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
