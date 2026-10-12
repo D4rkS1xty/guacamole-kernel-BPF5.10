@@ -1,0 +1,62 @@
+name: Build guacamole kernels
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+env:
+  CLANG_REPO: https://github.com/kdrag0n/proton-clang
+  KERNEL_REPO: https://github.com/yaap/kernel_oneplus_sm8150
+  KERNEL_BRANCH: sixteen-bpfgore
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: yaap
+            defconfig: neptune_defconfig
+          - target: oss
+            defconfig: stock_defconfig
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo apt-get clean
+
+      - name: Install toolchain + dependencies
+        run: bash scripts/setup-toolchain.sh
+
+      - name: Clone kernel source (${{ env.KERNEL_BRANCH }})
+        run: git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
+
+      - name: Apply KernelSU-Next + SUSFS + config patches
+        env:
+          DEFCONFIG: ${{ matrix.defconfig }}
+        run: bash scripts/apply-patches.sh
+
+      - name: Compile kernel
+        env:
+          DEFCONFIG: ${{ matrix.defconfig }}
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/build.sh
+
+      - name: Package AnyKernel3 zip
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/package.sh
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.target }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
