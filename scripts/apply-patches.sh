@@ -236,8 +236,62 @@ if grep -q '__getnstimeofday64' drivers/soc/qcom/subsystem_restart.c; then
   echo "tree fix: subsystem_restart.c uses ktime_get_real_ts64()"
 fi
 
+# kernel/sched/debug.c calls cfs_rq_of(&p->se), but cfs_rq_of() only exists as
+# a static inline in fair.c; move it into sched.h so debug.c can see it.
+if ! grep -q 'cfs_rq_of(struct sched_entity \*se)' kernel/sched/sched.h; then
+  cat > /tmp/cfsrq_of.h <<'EOF'
+
+#ifdef CONFIG_FAIR_GROUP_SCHED
+static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
+{
+	return se->cfs_rq;
+}
+#else
+static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
+{
+	struct task_struct *p = container_of(se, struct task_struct, se);
+	struct rq *rq = task_rq(p);
+
+	return &rq->cfs;
+}
+#endif
+EOF
+  sed -i '/extern int entity_eligible(struct cfs_rq \*cfs_rq, struct sched_entity \*se);/r /tmp/cfsrq_of.h' \
+    kernel/sched/sched.h
+  perl -0777 -i -pe 's{/\* runqueue on which this entity is \(to be\) queued \*/\nstatic inline struct cfs_rq \*cfs_rq_of\(struct sched_entity \*se\)\n\{\n\treturn se->cfs_rq;\n\}\n}{}s' \
+    kernel/sched/fair.c
+  perl -0777 -i -pe 's{static inline struct cfs_rq \*cfs_rq_of\(struct sched_entity \*se\)\n\{\n\tstruct task_struct \*p = task_of\(se\);\n\tstruct rq \*rq = task_rq\(p\);\n\n\treturn &rq->cfs;\n\}\n}{}s' \
+    kernel/sched/fair.c
+  echo "tree fix: moved cfs_rq_of() into kernel/sched/sched.h"
+fi
+
+# drivers/block/vs_block_server.c calls bio_alloc_pages(), removed from this
+# tree's bio layer; restore the classic 4.14 helper.
+if ! grep -q 'bio_alloc_pages' block/bio.c; then
+  cat >> block/bio.c <<'EOF'
+
+int bio_alloc_pages(struct bio *bio, gfp_t gfp_mask)
+{
+	struct bio_vec *bv;
+	int i;
+
+	bio_for_each_segment_all(bv, bio, i) {
+		bv->bv_page = alloc_page(gfp_mask);
+		if (!bv->bv_page)
+			return -ENOMEM;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(bio_alloc_pages);
+EOF
+  perl -0777 -i -pe 's{(extern struct bio \*bio_alloc_bioset\(gfp_t, unsigned int, struct bio_set \*\);\n)}{$1extern int bio_alloc_pages(struct bio *bio, gfp_t gfp);\n}s' \
+    include/linux/bio.h
+  echo "tree fix: restored bio_alloc_pages()"
+fi
+
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
