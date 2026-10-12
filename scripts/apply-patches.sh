@@ -181,8 +181,26 @@ if ! grep -q 'XT_OWNER_SUPPL_GROUPS' include/uapi/linux/netfilter/xt_owner.h; th
   echo "tree fix: added XT_OWNER_SUPPL_GROUPS to xt_owner.h"
 fi
 
+# kernel/sched/walt.c uses the (sd, cpu) form of the capacity helpers, but this
+# tree aliases arch_scale_cpu_capacity()/arch_scale_freq_capacity() to the
+# single-argument topology_get_{cpu,freq}_scale(cpu) -> "too many arguments".
+if grep -q 'arch_scale_cpu_capacity(NULL' kernel/sched/walt.c; then
+  sed -i 's/arch_scale_cpu_capacity(NULL, /arch_scale_cpu_capacity(/g; s/arch_scale_freq_capacity(NULL, /arch_scale_freq_capacity(/g' \
+    kernel/sched/walt.c
+  echo "tree fix: walt.c capacity helpers use the 1-arg form"
+fi
+
+# fs/verity/signature.c references an undefined desc/desc_size (leftover from
+# the descriptor-signing scheme); this tree signs the formatted digest, so
+# bound the signature by FS_VERITY_MAX_SIGNATURE_SIZE instead.
+if grep -q 'sig_size > desc_size - sizeof(\*desc)' fs/verity/signature.c; then
+  perl -0777 -i -pe 's/sig_size > desc_size - sizeof\(\*desc\)/sig_size > FS_VERITY_MAX_SIGNATURE_SIZE/' \
+    fs/verity/signature.c
+  echo "tree fix: fs/verity/signature.c uses FS_VERITY_MAX_SIGNATURE_SIZE"
+fi
+
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
