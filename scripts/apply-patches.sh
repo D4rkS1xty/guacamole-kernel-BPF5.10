@@ -318,6 +318,16 @@ if [ "$(grep -c '#ifdef CONFIG_OP_PASSTHROUGH_HACK' drivers/power/supply/qcom/sm
   echo "tree fix: guarded smb5-lib.c passthrough_hack reference"
 fi
 
+# arm64 links a PIE vmlinux; the absolute (R_AARCH64_ABS32) __kcrctab
+# relocations emitted when CONFIG_MODVERSIONS=y are rejected by modern LLD
+# ("recompile with -fPIC"). Select relative CRCs like the other PIE
+# architectures (powerpc/um) so __CRC_SYMBOL emits PC-relative entries.
+if ! grep -q 'select MODULE_REL_CRCS' arch/arm64/Kconfig; then
+  perl -0pi -e 's/(\tselect IRQ_FORCED_THREADING\n)/$1\tselect MODULE_REL_CRCS if MODVERSIONS\n/' \
+    arch/arm64/Kconfig
+  echo "tree fix: select MODULE_REL_CRCS for arm64"
+fi
+
 # lib/zstd links zstd_common.o only when CONFIG_ZSTD_COMMON is set, but this
 # tree's Kconfig never selects it for COMPRESS/DECOMPRESS, leaving ZSTD_*/HUF_*/
 # FSE_* symbols unresolved at vmlinux link; select it from both.
@@ -336,7 +346,7 @@ if ! grep -q '#ifdef CONFIG_CPU_INPUT_BOOST' kernel/fork.c; then
 fi
 
 git add -A
-git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/sdhci-msm-affine/smb5-passthrough/zstd-common/boost-guard)" || true
+git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/sdhci-msm-affine/smb5-passthrough/rel-crcs/zstd-common/boost-guard)" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
