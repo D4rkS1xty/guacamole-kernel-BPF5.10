@@ -24,14 +24,22 @@ MAKE=(make -C "$KDIR" ARCH=arm64
 dump_diag() {
   local rc=$?
   echo "::error::build.sh failed (rc=$rc) DEFCONFIG=$DEFCONFIG target=${TARGET:-}"
-  tail -n 10 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done || true
+  local filt='error:|Error [0-9]+|undefined reference|fatal error|No rule to make|Cannot use|not supported by compiler|Killed|out of memory'
+  local errs=()
+  mapfile -t errs < <(grep -n -iE "$filt" "$LOG" 2>/dev/null | tail -n 9)
+  if [ "${#errs[@]}" -gt 0 ]; then
+    printf '::error:: %s\n' "${errs[@]}"
+  else
+    tail -n 9 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::error:: $l"; done
+  fi
+  tail -n 10 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::warning::tail: $l"; done
   {
     echo ""
     echo "### Compile failure: DEFCONFIG=$DEFCONFIG rc=$rc"
     echo '```'
-    grep -n -iE 'error:|Error [0-9]+|Cannot use|No rule|not supported|fatal error|command not found' "$LOG" 2>/dev/null | head -n 60 || true
-    echo "----- last 150 lines -----"
-    tail -n 150 "$LOG" 2>/dev/null || true
+    grep -n -iE "$filt" "$LOG" 2>/dev/null | head -n 120 || true
+    echo "----- last 200 lines -----"
+    tail -n 200 "$LOG" 2>/dev/null || true
     echo '```'
   } >> "$SUMMARY"
 }

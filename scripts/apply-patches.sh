@@ -99,6 +99,9 @@ CONFIG_MODULES=y
 CONFIG_KSU_KPROBES_HOOK=y
 CONFIG_KSU_KPROBE_HOOKS=y
 
+# --- SoC / sched symbols missing from some defconfigs ---
+CONFIG_LITTLE_CPU_MASK=15
+
 # --- SUSFS ---
 CONFIG_KSU_SUSFS=y
 
