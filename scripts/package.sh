@@ -27,7 +27,7 @@ else
 fi
 
 if [ -f "$AK/anykernel.sh" ]; then
-  sed -i -E 's|^kernel\.string=.*|kernel.string=guacamole KernelSU-Next|' "$AK/anykernel.sh"
+  sed -i -E 's|^kernel\.string=.*|kernel.string=SukiSU-Ultra guacamole|' "$AK/anykernel.sh"
   sed -i -E 's|^do\.modules=.*|do.modules=0|' "$AK/anykernel.sh"
   sed -i -E 's|^device\.name1=.*|device.name1=OnePlus7Pro|' "$AK/anykernel.sh"
   sed -i -E 's|^device\.name2=.*|device.name2=guacamole|' "$AK/anykernel.sh"
@@ -36,7 +36,7 @@ if [ -f "$AK/anykernel.sh" ]; then
 fi
 
 STAMP="$(date +%Y%m%d-%H%M)"
-ZIP="KernelSU-Next-${TARGET}-${STAMP}.zip"
+ZIP="SukiSU-Ultra-${TARGET}-${STAMP}.zip"
 ( cd "$AK" && zip -r9 "$DIST/$ZIP" . -x '*.git*' >/dev/null )
 
 echo "Built: $DIST/$ZIP"

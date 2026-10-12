@@ -31,13 +31,19 @@ jobs:
             /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           sudo apt-get clean
 
+      - name: Cache clang toolchain
+        uses: actions/cache@v4
+        with:
+          path: tc/clang
+          key: clang-r547379
+
       - name: Install toolchain + dependencies
         run: bash scripts/setup-toolchain.sh
 
       - name: Clone kernel source (${{ env.KERNEL_BRANCH }})
         run: git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
 
-      - name: Apply KernelSU-Next + SUSFS + config patches
+      - name: Apply SukiSU-Ultra + SUSFS + config patches
         env:
           DEFCONFIG: ${{ matrix.defconfig }}
         run: bash scripts/apply-patches.sh
