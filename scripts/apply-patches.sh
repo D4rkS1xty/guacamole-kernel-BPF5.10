@@ -37,6 +37,22 @@ git commit -q -m "Add KernelSU-Next" || true
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
+# 1b) Tree fixes for regressions in the WIP sixteen-bpfgore branch
+# ---------------------------------------------------------------------------
+echo "::group::tree fixes"
+# printk.c (backported from a newer kernel) uses KMSG_DUMP_MAX, but the enum
+# in include/linux/kmsg_dump.h was not updated -> compile error. Add it.
+if [ -f include/linux/kmsg_dump.h ] && ! grep -q 'KMSG_DUMP_MAX' include/linux/kmsg_dump.h; then
+  sed -i '/KMSG_DUMP_POWEROFF/a\\tKMSG_DUMP_MAX,' include/linux/kmsg_dump.h
+  echo "tree fix: added KMSG_DUMP_MAX to include/linux/kmsg_dump.h"
+else
+  echo "tree fix: kmsg_dump.h already has KMSG_DUMP_MAX (or file missing)"
+fi
+git add -A
+git commit -q -m "tree fix: add KMSG_DUMP_MAX to kmsg_dump.h" || true
+echo "::endgroup::"
+
+# ---------------------------------------------------------------------------
 # 2) SUSFS (kernel-4.14). Best effort: revert cleanly if the patch conflicts.
 # ---------------------------------------------------------------------------
 echo "::group::SUSFS (kernel-4.14)"
@@ -101,6 +117,7 @@ CONFIG_KSU_KPROBE_HOOKS=y
 
 # --- SoC / sched symbols missing from some defconfigs ---
 CONFIG_LITTLE_CPU_MASK=15
+CONFIG_BIG_CPU_MASK=112
 
 # --- SUSFS ---
 CONFIG_KSU_SUSFS=y

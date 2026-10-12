@@ -19,19 +19,33 @@ export KBUILD_BUILD_VERSION=1
 
 MAKE=(make -C "$KDIR" ARCH=arm64
   CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
-  OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip)
+  OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+  LD_COMPAT=ld.lld)
 
 dump_diag() {
   local rc=$?
   echo "::error::build.sh failed (rc=$rc) DEFCONFIG=$DEFCONFIG target=${TARGET:-}"
   local filt='error:|Error [0-9]+|undefined reference|fatal error|No rule to make|Cannot use|not supported by compiler|Killed|out of memory'
   local errs=()
-  mapfile -t errs < <(grep -n -iE "$filt" "$LOG" 2>/dev/null | tail -n 9)
-  if [ "${#errs[@]}" -gt 0 ]; then
-    printf '::error:: %s\n' "${errs[@]}"
+  mapfile -t errs < <(grep -n -iE "$filt" "$LOG" 2>/dev/null)
+  local n=${#errs[@]}
+  if [ "$n" -gt 0 ]; then
+    printf '::error:: %s\n' "${errs[@]:0:8}"
+    if [ "$n" -gt 16 ]; then
+      printf '::error:: ... (%d error lines omitted) ...\n' "$((n-16))"
+      printf '::error:: %s\n' "${errs[@]: -8}"
+    fi
   else
     tail -n 9 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::error:: $l"; done
   fi
+  for f in include/generated/vdso32-offsets.h include/generated/vdso-offsets.h; do
+    if [ -f "$KDIR/$f" ]; then
+      echo "::warning::DIAG $f ($(wc -l < "$KDIR/$f") lines)"
+      sed -n '1,10p' "$KDIR/$f" | while IFS= read -r l; do echo "::warning::DIAG | $l"; done
+    else
+      echo "::warning::DIAG $f MISSING"
+    fi
+  done
   tail -n 10 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::warning::tail: $l"; done
   {
     echo ""
