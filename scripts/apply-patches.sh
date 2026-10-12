@@ -335,6 +335,32 @@ if ! grep -q '#ifdef CONFIG_CPU_INPUT_BOOST' kernel/fork.c; then
   echo "tree fix: guarded fork.c input-boost block"
 fi
 
+# drivers/soc/qcom/msm_bus: the RPMH fabric/debug objects call trace_bus_*()
+# (declared in include/trace/events/trace_msm_bus.h), but no object in this WIP
+# tree instantiates the tracepoints, leaving __tracepoint_bus_* undefined at
+# vmlinux link. Define them once in an always-built RPMH object (not the
+# CONFIG_DEBUG_FS-gated debug file).
+if [ -f drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c ] && \
+   ! grep -q 'CREATE_TRACE_POINTS' drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c; then
+  perl -0777 -i -pe 's{(#include <trace/events/trace_msm_bus\.h>\n)}{#define CREATE_TRACE_POINTS\n$1}' \
+    drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c
+  echo "tree fix: instantiate msm_bus tracepoints (CREATE_TRACE_POINTS)"
+fi
+
+# drivers/soc/qcom/watchdog_v2.c calls migrate_disable()/migrate_enable(), which
+# have no definition anywhere in this tree (SMP-only APIs this backport never
+# wired up). A preempt bracket gives the same "do not migrate between reading
+# the CPU and using per-cpu data" guarantee for this short, non-sleeping
+# critical section.
+if grep -q 'migrate_disable();' drivers/soc/qcom/watchdog_v2.c; then
+  grep -q 'linux/preempt.h' drivers/soc/qcom/watchdog_v2.c || \
+    sed -i 's|#include <linux/sched.h>|#include <linux/sched.h>\n#include <linux/preempt.h>|' \
+      drivers/soc/qcom/watchdog_v2.c
+  sed -i 's/migrate_disable();/preempt_disable();/; s/migrate_enable();/preempt_enable();/' \
+    drivers/soc/qcom/watchdog_v2.c
+  echo "tree fix: watchdog_v2.c migrate_disable/enable -> preempt_disable/enable"
+fi
+
 git add -A
 git commit -q -m "tree fix: bpfgore regressions (kmsg/ipc/stddef/gso/lz4/lse/devfreq/errata/sched-trace/irq-config/packet/xt_owner/walt/fsverity-sig/memset-after/ns-time/cfs-rq/bio-pages/tcp-cong/mmc-caps/sdhci-presets/sdhci-msm-affine/smb5-passthrough/zstd-common/boost-guard)" || true
 echo "::endgroup::"
@@ -359,6 +385,56 @@ echo "applied SUSFS kernel-side patch"
 # 2c) Manual KernelSU entry-point hooks (execveat/faccessat/stat/read/input)
 git apply --whitespace=nowarn "$PATCHDIR/0002-kernelsu-hooks.patch"
 echo "applied KernelSU manual hook patch"
+
+# 2c-2) KernelSU<->SUSFS glue. The vendored KernelSU tree references
+#       susfs_extra_works, and the SUSFS 4.14 kernel hooks call
+#       ksu_try_umount()/susfs_try_umount_all(), but this SUSFS drop does not
+#       define any of them (they normally live in a KernelSU-side integration
+#       patch that this recipe never shipped). Provide them here so vmlinux
+#       links: the deferred work runs the try_umount pass, ksu_try_umount()
+#       performs the actual umount, and susfs_try_umount_all() walks the
+#       registered LH_TRY_UMOUNT_PATH list.
+if ! grep -q 'susfs_run_extra_works' fs/susfs.c; then
+  cat >> fs/susfs.c <<'EOF'
+
+/* ---- KernelSU <-> SUSFS glue (missing from this SUSFS drop) ---- */
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/workqueue.h>
+extern void susfs_run_try_umount_for_current_mnt_ns(void);
+static void susfs_run_extra_works(struct work_struct *work);
+DECLARE_WORK(susfs_extra_works, susfs_run_extra_works);
+static void susfs_run_extra_works(struct work_struct *work)
+{
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+	susfs_run_try_umount_for_current_mnt_ns();
+#endif
+}
+#endif /* CONFIG_KSU_SUSFS */
+
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+extern int path_umount(struct path *path, int flags);
+
+void ksu_try_umount(const char *mnt, bool check_mnt, int flags, uid_t uid)
+{
+	struct path path;
+	int err;
+
+	err = kern_path(mnt, 0, &path);
+	if (err)
+		return;
+	err = path_umount(&path, flags);
+	if (err)
+		pr_warn("susfs: umount '%s' failed: %d\n", mnt, err);
+}
+
+void susfs_try_umount_all(uid_t uid)
+{
+	susfs_try_umount(uid);
+}
+#endif /* CONFIG_KSU_SUSFS_TRY_UMOUNT */
+EOF
+  echo "tree fix: added KernelSU<->SUSFS glue to fs/susfs.c"
+fi
 
 # 2d) Wire the driver: symlink + Kbuild + Kconfig
 ln -sfn ../KernelSU/kernel drivers/kernelsu
@@ -402,6 +478,17 @@ CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
 CONFIG_KSU_SUSFS_TRY_UMOUNT=y
 CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
 CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+
+# --- Input boost: this tree's sched/GPU backports read the global
+#     last_input_time, which is defined only by
+#     drivers/devfreq/devfreq_boost.c when CONFIG_DEVFREQ_BOOST is enabled
+#     (via its `#if CONFIG_INPUT_BOOST_DURATION_MS == 0` guard; that symbol
+#     is undefined while CONFIG_CPU_INPUT_BOOST is off, so it evaluates to 0).
+#     neptune_defconfig sets DEVFREQ_BOOST; stock does not, which left
+#     last_input_time undefined at vmlinux link. ---
+CONFIG_DEVFREQ_BOOST=y
+CONFIG_DEVFREQ_INPUT_BOOST_DURATION_MS=58
+CONFIG_DEVFREQ_WAKE_BOOST_DURATION_MS=500
 
 # --- SoC / sched symbols missing from some defconfigs ---
 CONFIG_LITTLE_CPU_MASK=15
