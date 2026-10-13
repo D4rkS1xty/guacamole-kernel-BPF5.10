@@ -30,10 +30,8 @@ sed -i -E \
   -e '/^CONFIG_SECURITY_SELINUX_BOOTPARAM=/d' \
   -e '/^# CONFIG_SECURITY_SELINUX_BOOTPARAM is not set/d' \
   -e '/^CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=/d' \
+  -e '/^CONFIG_SECURITY_SELINUX_DEVELOP=/d' \
   "$CFG"
-
-# Keep DEVELOP (it lets userspace toggle enforcing/permissive).
-grep -q '^CONFIG_SECURITY_SELINUX_DEVELOP=' "$CFG" || true
 
 cat >> "$CFG" <<'EOF'
 

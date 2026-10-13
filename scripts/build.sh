@@ -58,7 +58,10 @@ echo "::endgroup::"
 {
   echo "===== make $DEFCONFIG ====="
   "${MAKE[@]}" "$DEFCONFIG"
-  echo "===== make olddefconfig ====="
+  echo "===== make olddefconfig (non-interactive) ====="
+  # Avoid interactive prompts from NEW Kconfig symbols in the appended configs
+  "${MAKE[@]}" olddefconfig 2>&1 | tee -a "$LOG" || true
+  # Retry with all defaults to be safe
   "${MAKE[@]}" olddefconfig
 } 2>&1 | tee "$LOG"
 
