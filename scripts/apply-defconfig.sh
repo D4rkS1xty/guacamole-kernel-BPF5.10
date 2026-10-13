@@ -31,9 +31,25 @@ sed -i -E \
   -e '/^# CONFIG_SECURITY_SELINUX_BOOTPARAM is not set/d' \
   -e '/^CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=/d' \
   -e '/^CONFIG_SECURITY_SELINUX_DEVELOP=/d' \
+  -e '/^CONFIG_LITTLE_CPU_MASK=/d' \
+  -e '/^CONFIG_BIG_CPU_MASK=/d' \
+  -e '/^CONFIG_PRIME_CPU_MASK=/d' \
   "$CFG"
 
 cat >> "$CFG" <<'EOF'
+
+# ---------------------------------------------------------------------------
+# CPU topology masks (SM8150: 4x silver / 3x gold / 1x prime).
+#
+# These are integer Kconfig symbols with no default value, and the device
+# "stock_defconfig" does not set them (only the root "defconfig" does).  If
+# they are left unset, `make` falls back to `silentoldconfig`, which tries to
+# prompt for them and aborts because stdin is redirected.  Set them here so
+# `olddefconfig` produces a complete, non-interactive .config.
+# ---------------------------------------------------------------------------
+CONFIG_LITTLE_CPU_MASK=15
+CONFIG_BIG_CPU_MASK=112
+CONFIG_PRIME_CPU_MASK=128
 
 # ---------------------------------------------------------------------------
 # 5.10 BPF backport (PixelPlusUI guacamole)

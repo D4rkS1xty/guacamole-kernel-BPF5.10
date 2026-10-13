@@ -65,6 +65,14 @@ echo "::endgroup::"
   "${MAKE[@]}" olddefconfig
 } 2>&1 | tee "$LOG"
 
+# --- guard: unresolved symbols show up as empty "CONFIG_FOO=" lines.  If any
+# --- remain, `make` will re-run silentoldconfig and abort on a prompt.
+empties=$(grep -nE '^CONFIG_[A-Za-z0-9_]+=$' "$KDIR/.config" || true)
+if [ -n "$empties" ]; then
+  echo "::warning::.config has unresolved (empty) symbols; silentoldconfig may prompt:"
+  printf '%s\n' "$empties" | sed 's/^/  /'
+fi
+
 # --- verify the requested 5.10 BPF options survived olddefconfig -----------
 echo "::group::config verification"
 verify_ok=1
