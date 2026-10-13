@@ -1,24 +1,46 @@
-name: Build guacamole kernels
+name: Build guacamole kernel (PixelPlusUI + 5.10 BPF)
+
+# Builds the OnePlus 7 Pro (guacamole) kernel from
+#   https://github.com/PixelPlusUI-Devices/kernel_oneplus_guacamole  (tiramisu)
+# with the full 5.10 BPF backport cherry-picked from
+#   https://github.com/PhoenixKernel/linux  (android-4.14-phoenix)
+# (the exact range from 4.14_5.10bpf_commits.txt: cc47ca5^..7b03162)
+#
+# Adds BPF_LSM / BPF_PRELOAD / CONFIG_LSM, makes SELinux permissive by
+# default, and packages a TWRP/AnyKernel3 flashable zip.
 
 on:
   workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "arm64 defconfig to build"
+        required: false
+        default: "stock_defconfig"
+      skip_bpf:
+        description: "Set to 1 to skip the BPF backport (debug)"
+        required: false
+        default: "0"
   push:
     branches: [ main, master ]
+    paths-ignore:
+      - "**.md"
+      - "legacy/**"
 
 env:
-  CLANG_REPO: https://github.com/kdrag0n/proton-clang
-  KERNEL_REPO: https://github.com/yaap/kernel_oneplus_sm8150
-  KERNEL_BRANCH: sixteen-bpfgore
+  KERNEL_REPO: https://github.com/PixelPlusUI-Devices/kernel_oneplus_guacamole
+  KERNEL_BRANCH: tiramisu
+  BPF_REPO: https://github.com/PhoenixKernel/linux
+  BPF_BRANCH: android-4.14-phoenix
+  # Exact range from 4.14_5.10bpf_commits.txt
+  BPF_START: cc47ca5651d869c037f90cb5276d60f240c00719
+  BPF_END: 7b031620e7605c2cae5597bdc53f306e030ffd4a
+  # shallow depth used when fetching the backport branch (range is 1024 commits)
+  BPF_DEPTH: "1300"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: oss
-            defconfig: stock_defconfig
+    timeout-minutes: 350
     steps:
       - name: Checkout builder
         uses: actions/checkout@v4
@@ -26,41 +48,44 @@ jobs:
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/lib/node_modules /opt/az /usr/share/swift
           sudo apt-get clean
+          df -h /
 
       - name: Cache clang toolchain
         uses: actions/cache@v4
         with:
           path: tc/clang
-          key: clang-r547379
+          key: clang-r547379-v1
 
       - name: Install toolchain + dependencies
         run: bash scripts/setup-toolchain.sh
 
       - name: Clone kernel source (${{ env.KERNEL_BRANCH }})
-        run: git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
+        run: git clone --single-branch -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
 
-      - name: Apply SukiSU-Ultra + SUSFS + config patches
+      - name: Backport 5.10 BPF from PhoenixKernel
+        if: ${{ github.event.inputs.skip_bpf != '1' }}
+        run: bash scripts/backport-bpf.sh
+
+      - name: Apply defconfig changes (BPF_LSM/BPF_PRELOAD/CONFIG_LSM/permissive)
         env:
-          DEFCONFIG: ${{ matrix.defconfig }}
-        run: bash scripts/apply-patches.sh
+          DEFCONFIG: ${{ github.event.inputs.defconfig || 'stock_defconfig' }}
+        run: bash scripts/apply-defconfig.sh
 
       - name: Compile kernel
         env:
-          DEFCONFIG: ${{ matrix.defconfig }}
-          TARGET: ${{ matrix.target }}
+          DEFCONFIG: ${{ github.event.inputs.defconfig || 'stock_defconfig' }}
         run: bash scripts/build.sh
 
-      - name: Package AnyKernel3 zip
-        env:
-          TARGET: ${{ matrix.target }}
+      - name: Package AnyKernel3 zip (flashable from TWRP)
         run: bash scripts/package.sh
 
       - name: Upload flashable zip
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.target }}
+          name: guacamole-ppui-bpf5.10
           path: dist/*.zip
           if-no-files-found: error
           retention-days: 30

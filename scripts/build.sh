@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="${GITHUB_WORKSPACE:-$PWD}"
 CLANG="$ROOT/tc/clang/bin"
 KDIR="$ROOT/kernel"
-LOG="$ROOT/build-${TARGET:-kernel}.log"
+LOG="$ROOT/build-kernel.log"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 export PATH="$CLANG:$PATH"
@@ -19,12 +19,11 @@ export KBUILD_BUILD_VERSION=1
 
 MAKE=(make -C "$KDIR" ARCH=arm64
   CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
-  OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-  LD_COMPAT=ld.lld)
+  OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip)
 
 dump_diag() {
   local rc=$?
-  echo "::error::build.sh failed (rc=$rc) DEFCONFIG=$DEFCONFIG target=${TARGET:-}"
+  echo "::error::build.sh failed (rc=$rc) DEFCONFIG=$DEFCONFIG"
   local filt='error:|Error [0-9]+|undefined reference|fatal error|No rule to make|Cannot use|not supported by compiler|Killed|out of memory'
   local errs=()
   mapfile -t errs < <(grep -n -iE "$filt" "$LOG" 2>/dev/null)
@@ -38,22 +37,14 @@ dump_diag() {
   else
     tail -n 9 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::error:: $l"; done
   fi
-  for f in include/generated/vdso32-offsets.h include/generated/vdso-offsets.h; do
-    if [ -f "$KDIR/$f" ]; then
-      echo "::warning::DIAG $f ($(wc -l < "$KDIR/$f") lines)"
-      sed -n '1,10p' "$KDIR/$f" | while IFS= read -r l; do echo "::warning::DIAG | $l"; done
-    else
-      echo "::warning::DIAG $f MISSING"
-    fi
-  done
   tail -n 10 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::warning::tail: $l"; done
   {
     echo ""
     echo "### Compile failure: DEFCONFIG=$DEFCONFIG rc=$rc"
     echo '```'
-    grep -n -iE "$filt" "$LOG" 2>/dev/null | head -n 120 || true
-    echo "----- last 200 lines -----"
-    tail -n 200 "$LOG" 2>/dev/null || true
+    grep -n -iE "$filt" "$LOG" 2>/dev/null | head -n 150 || true
+    echo "----- last 250 lines -----"
+    tail -n 250 "$LOG" 2>/dev/null || true
     echo '```'
   } >> "$SUMMARY"
 }
@@ -62,10 +53,6 @@ trap 'dump_diag' ERR
 echo "::group::toolchain"
 command -v clang || true
 clang --version | head -n 1 || true
-for f in "-fstack-protector-strong" "-mllvm -polly" "-flto=thin"; do
-  if clang $f -c -x c /dev/null -o /dev/null >/dev/null 2>&1; then r=OK; else r=FAIL; fi
-  echo "::notice::clang probe ${f} = ${r}"
-done
 echo "::endgroup::"
 
 {
@@ -73,10 +60,36 @@ echo "::endgroup::"
   "${MAKE[@]}" "$DEFCONFIG"
   echo "===== make olddefconfig ====="
   "${MAKE[@]}" olddefconfig
-  echo "===== make -j$(nproc) ====="
-  "${MAKE[@]}" -j"$(nproc)"
 } 2>&1 | tee "$LOG"
 
+# --- verify the requested 5.10 BPF options survived olddefconfig -----------
+echo "::group::config verification"
+verify_ok=1
+check_y() {
+  local sym="$1"
+  if grep -q "^$sym=y" "$KDIR/.config"; then
+    echo "OK   $sym=y"
+  else
+    echo "::error::MISSING $sym=y in .config (Kconfig symbol absent? backport incomplete?)"
+    verify_ok=0
+  fi
+}
+check_y CONFIG_BPF_LSM
+check_y CONFIG_BPF_PRELOAD
+check_y CONFIG_BPF_SYSCALL
+echo "CONFIG_LSM value: $(grep '^CONFIG_LSM=' "$KDIR/.config" || echo '<unset>')"
+grep -q '^CONFIG_LSM=' "$KDIR/.config" || { echo "::error::CONFIG_LSM missing"; verify_ok=0; }
+echo "SELinux bootparam: $(grep '^CONFIG_SECURITY_SELINUX_BOOTPARAM' "$KDIR/.config" || echo '<unset>')"
+echo "SELinux develop : $(grep '^CONFIG_SECURITY_SELINUX_DEVELOP' "$KDIR/.config" || echo '<unset>')"
+echo "::endgroup::"
+if [ "$verify_ok" != 1 ]; then
+  echo "::error::required BPF/LSM config options were not applied"
+  exit 1
+fi
+
+echo "===== make -j$(nproc) ====="
+"${MAKE[@]}" -j"$(nproc)" 2>&1 | tee -a "$LOG"
+
 echo "::group::build output"
-ls -l "$KDIR/arch/arm64/boot/"
+ls -l "$KDIR/arch/arm64/boot/" || true
 echo "::endgroup::"
