@@ -18,18 +18,18 @@ CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-
 if [ ! -x "$CLANG_DIR/bin/clang" ]; then
   mkdir -p "$CLANG_DIR"
   ok=0
-  for i in 1 2 3 4 5; do
+  for i in 1 2 3 4 5 6 7 8 9 10; do
     rm -f "$TARBALL"
-    if curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
-         --connect-timeout 30 --max-time 1800 "$CLANG_URL" -o "$TARBALL"; then
+    if curl -fL --retry 10 --retry-all-errors --retry-delay 10 \
+         --connect-timeout 60 --max-time 3600 "$CLANG_URL" -o "$TARBALL"; then
       ok=1
       break
     fi
-    echo "clang download attempt $i failed; retrying in 15s..."
-    sleep 15
+    echo "clang download attempt $i failed; retrying in 30s..."
+    sleep 30
   done
   if [ "$ok" != 1 ]; then
-    echo "::error::failed to download clang toolchain after 5 attempts"
+    echo "::error::failed to download clang toolchain after 10 attempts"
     exit 1
   fi
   tar -xzf "$TARBALL" -C "$CLANG_DIR"
