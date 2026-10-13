@@ -69,6 +69,10 @@ jobs:
         if: ${{ github.event.inputs.skip_bpf != '1' }}
         run: bash scripts/backport-bpf.sh
 
+      - name: Apply backport helper fixups
+        if: ${{ github.event.inputs.skip_bpf != '1' }}
+        run: bash scripts/fixups.sh
+
       - name: Apply defconfig changes (BPF_LSM/BPF_PRELOAD/CONFIG_LSM/permissive)
         env:
           DEFCONFIG: ${{ github.event.inputs.defconfig || 'stock_defconfig' }}

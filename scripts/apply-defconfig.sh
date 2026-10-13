@@ -34,6 +34,8 @@ sed -i -E \
   -e '/^CONFIG_LITTLE_CPU_MASK=/d' \
   -e '/^CONFIG_BIG_CPU_MASK=/d' \
   -e '/^CONFIG_PRIME_CPU_MASK=/d' \
+  -e '/^CONFIG_MODVERSIONS=/d' \
+  -e '/^# CONFIG_MODVERSIONS is not set/d' \
   "$CFG"
 
 cat >> "$CFG" <<'EOF'
@@ -62,6 +64,16 @@ CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,appar
 CONFIG_SECURITY_SELINUX_BOOTPARAM=y
 CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0
 CONFIG_SECURITY_SELINUX_DEVELOP=y
+
+# ---------------------------------------------------------------------------
+# Build fixes needed by the backported tree / LLD toolchain
+# ---------------------------------------------------------------------------
+
+# MODVERSIONS emits absolute __crc_* relocations that the Android LLD rejects
+# when linking the relocatable arm64 vmlinux ("relocation R_AARCH64_ABS32 ...
+# cannot be used against symbol '__crc_...'; recompile with -fPIC").  Every
+# module is built in-tree from this same source, so versioning is not needed.
+# CONFIG_MODVERSIONS is not set
 EOF
 
 # The LSM framework also has a legacy "default security" symbol. Make sure it
