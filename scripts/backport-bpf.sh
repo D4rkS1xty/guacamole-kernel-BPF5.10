@@ -30,10 +30,15 @@ KDIR="$ROOT/kernel"
 : "${BPF_START:?BPF_START not set}"
 : "${BPF_END:?BPF_END not set}"
 BPF_DEPTH="${BPF_DEPTH:-1300}"
-# Pre-range commits the backport depends on that the ArrowOS tree does not have.
-# Oldest first.  These are the 4.15 "pid rework" commits; the range's first
-# commit (cc47ca565) already passes PIDTYPE_TGID to group_send_sig_info.
-BPF_PREREQS="${BPF_PREREQS:-89d8c9333e2df92399d857dda61551a7e51cbb7f 554c38ad4f7f99babf7f58324a38e3fa71238e7b}"
+# Pre-range commits the backport depends on that the ArrowOS tree does not
+# have: the complete 4.15 "pid rework" series that sits immediately below the
+# range in PhoenixKernel.  The range's first commit already passes PIDTYPE_TGID
+# into group_send_sig_info(), later ones drop init/init_task.c's thread-union
+# definition in favour of the linker-script one, and the whole series assumes
+# signal_struct::leader_pid / ::pgrp / ::session -- none of which exist in
+# ArrowOS's 4.14 tree, so the entire series has to come across first.  Given as
+# a commit range and expanded (oldest first) once the history is fetched.
+BPF_PREREQ_RANGE="${BPF_PREREQ_RANGE:-218e8b8c448fb0294965ae92a6c229b3ca489165^..554c38ad4f7f99babf7f58324a38e3fa71238e7b}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 cd "$KDIR"
@@ -58,7 +63,8 @@ fetch_range() {
   git fetch --no-tags --depth="$depth" bpf "$BPF_END"
 }
 # The oldest prerequisite is the deepest history we need beyond the range.
-oldest_prereq="${BPF_PREREQS%% *}"
+oldest_prereq="${BPF_PREREQ_RANGE%%..*}"
+oldest_prereq="${oldest_prereq%^}"
 needs_deeper() {
   git rev-parse --verify --quiet "${BPF_START}^" >/dev/null || return 0
   git rev-parse --verify --quiet "$oldest_prereq" >/dev/null || return 0
@@ -131,21 +137,24 @@ pick() {
 }
 
 # --- prerequisites (pre-range commits the range depends on) ----------------
-if [ -n "${BPF_PREREQS// /}" ]; then
-  echo "::group::cherry-picking prerequisites"
-  for p in $BPF_PREREQS; do
-    psub="$(git log -1 --format=%s "$p" 2>/dev/null || echo '?')"
-    pick "$p"; rc=$?
-    case $rc in
-      0) st=clean ;;
-      1) st=resolved ;;
-      *) st=skipped ;;
-    esac
-    prereq_report+=("$st  ${p:0:12}  $psub")
-    echo "  ${p:0:12} $psub -> $st"
-  done
-  echo "::endgroup::"
+mapfile -t PREREQS < <(git rev-list --reverse "$BPF_PREREQ_RANGE" 2>/dev/null)
+if [ "${#PREREQS[@]}" -eq 0 ]; then
+  echo "::error::could not expand prerequisite range $BPF_PREREQ_RANGE"
+  exit 1
 fi
+echo "::group::cherry-picking prerequisites (${#PREREQS[@]} pid-rework commits)"
+for p in "${PREREQS[@]}"; do
+  psub="$(git log -1 --format=%s "$p" 2>/dev/null || echo '?')"
+  pick "$p"; rc=$?
+  case $rc in
+    0) st=clean ;;
+    1) st=resolved ;;
+    *) st=skipped ;;
+  esac
+  prereq_report+=("$st  ${p:0:12}  $psub")
+  echo "  ${p:0:12} $psub -> $st"
+done
+echo "::endgroup::"
 
 mapfile -t COMMITS < <(git rev-list --reverse "$BPF_START^..$BPF_END")
 TOTAL=${#COMMITS[@]}

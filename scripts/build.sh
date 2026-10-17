@@ -117,8 +117,8 @@ if [ "$verify_ok" != 1 ]; then
   exit 1
 fi
 
-echo "===== make -j$(nproc) Image.gz ====="
-"${MAKE[@]}" -j"$(nproc)" Image.gz 2>&1 | tee -a "$LOG"
+echo "===== make -k -j$(nproc) Image.gz (keep going: report every error) ====="
+"${MAKE[@]}" -k -j"$(nproc)" Image.gz 2>&1 | tee -a "$LOG"
 
 IMG="$KDIR/arch/arm64/boot/Image.gz"
 [ -f "$IMG" ] || { echo "::error::Image.gz was not produced"; ls -l "$KDIR/arch/arm64/boot/" || true; exit 1; }
