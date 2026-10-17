@@ -152,9 +152,93 @@ if [ "${#legacy_atomic[@]}" -gt 0 ]; then
   changed=1
 fi
 
+# --- top-level Makefile: drop the endif leaked by "-X theirs" --------------
+# The range's kbuild commits (built-in.a rename, bpfilter CC, BTF ids) were
+# authored against a top-level Makefile that carries an
+#
+#     ifneq ($(LLVM),)
+#       ...
+#     else
+#       ... OBJDUMP = $(CROSS_COMPILE)objdump
+#       READELF = $(CROSS_COMPILE)readelf
+#       STRIP   = $(CROSS_COMPILE)strip
+#     endif
+#     PAHOLE  = pahole
+#
+# block.  This CAF Makefile has no such block, so the merge only picks up the
+# block's trailing lines: a duplicated STRIP assignment and the orphan endif.
+# That orphan endif then closes the outer "ifeq ($(skip-makefile),)" which
+# wraps the whole file, so make dies on the file's real final endif with
+#
+#     Makefile:1962: *** extraneous 'endif'.  Stop.
+#
+# before compiling a single file.  Remove exactly that leaked tail.
+MK=Makefile
+if grep -qE '^READELF[[:space:]]*=[[:space:]]*\$\(CROSS_COMPILE\)readelf[[:space:]]*$' "$MK" 2>/dev/null; then
+  awk '
+    { a[NR]=$0 }
+    END {
+      for (i=1;i<=NR;i++) {
+        if (a[i] !~ /^READELF[ \t]*=[ \t]*\$\(CROSS_COMPILE\)readelf[ \t]*$/) continue
+        if (a[i+1] ~ /^STRIP[ \t]*=[ \t]*\$\(CROSS_COMPILE\)strip[ \t]*$/ \
+            && a[i+2] ~ /^endif[ \t]*$/ \
+            && a[i+3] ~ /^PAHOLE[ \t]*=[ \t]*pahole[ \t]*$/) {
+          skip[i+1]=1; skip[i+2]=1
+        } else if (a[i+1] ~ /^endif[ \t]*$/ \
+            && a[i+2] ~ /^PAHOLE[ \t]*=[ \t]*pahole[ \t]*$/) {
+          skip[i+1]=1
+        }
+      }
+      for (i=1;i<=NR;i++) if (!skip[i]) print a[i]
+    }' "$MK" > "$MK.tmp"
+  if ! cmp -s "$MK" "$MK.tmp"; then
+    echo "fixup: dropping the leaked endif (and duplicate STRIP) from the top-level Makefile"
+    mv "$MK.tmp" "$MK"
+    changed=1
+  else
+    rm -f "$MK.tmp"
+  fi
+fi
+
+# --- merge-artifact scan (report only) -------------------------------------
+# The cherry-pick resolves every conflict with "-X theirs", which can leave a
+# Kbuild file with an orphan or missing conditional; make only ever reports the
+# first one it trips over.  So scan them up front and list every file that
+# still looks unbalanced -- nothing is modified here.
+echo "::group::merge-artifact scan"
+mapfile -t mkfiles < <(find arch kernel mm fs net drivers security init lib \
+  block ipc crypto scripts include -type f \
+  \( -name Makefile -o -name Kbuild -o -name '*.mk' \) 2>/dev/null | sort -u || true)
+if [ "${#mkfiles[@]}" -gt 0 ]; then
+  awk '
+    FNR==1 {
+      if (NR>1 && depth>0) print prev ": " depth " unterminated conditional(s)"
+      depth=0; prev=FILENAME
+    }
+    {
+      s=$0; t=s
+      sub(/\r$/, "", t); sub(/^[ \t]+/, "", t)
+      if (substr(s,1,1)=="\t" || t=="" || substr(t,1,1)=="#") next
+      if (t ~ /^(ifeq|ifneq|ifdef|ifndef|if)([ \t]|$)/) depth++
+      else if (t ~ /^endif([ \t]|$)/) {
+        if (depth==0) print FILENAME ":" FNR ": stray endif"
+        else depth--
+      }
+    }
+    END { if (depth>0) print prev ": " depth " unterminated conditional(s)" }
+  ' "${mkfiles[@]}" || true
+fi
+mapfile -t markers < <(grep -rlE '^(<<<<<<< |>>>>>>> )' arch kernel mm fs net \
+  drivers security init lib block ipc crypto scripts include 2>/dev/null || true)
+if [ "${#markers[@]}" -gt 0 ]; then
+  echo "::warning::conflict markers left in ${#markers[@]} file(s):"
+  printf '  %s\n' "${markers[@]}"
+fi
+echo "::endgroup::"
+
 if [ "$changed" = 1 ]; then
   git add -A
-  git commit -q -m "fixup: restore core endpoint headers + atomic/skb helpers for 5.10 BPF backport" || true
+  git commit -q -m "fixup: restore core endpoint headers + atomic/skb helpers + Makefile for 5.10 BPF backport" || true
   echo "fixups committed"
 else
   echo "no fixups needed"

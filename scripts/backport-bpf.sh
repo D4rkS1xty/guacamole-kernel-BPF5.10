@@ -207,6 +207,16 @@ fi
   echo '```'
 } >> "$SUMMARY"
 
+# Also put the whole-file "theirs" list in the job log: those files are the
+# prime suspects for a leftover mis-merge when the compile fails.
+if [ "${#conflict_files[@]}" -gt 0 ]; then
+  echo "::group::conflicted files taken wholesale from the backport side"
+  printf '%s\n' "${conflict_files[@]}" | sort | uniq -c | sort -rn
+  echo "::endgroup::"
+else
+  echo "no whole-file conflict resolutions (everything merged per-hunk)"
+fi
+
 # --- critical backport artifacts -------------------------------------------
 # CONFIG_BPF_LSM cannot work (and the tree cannot link) unless the LSM refactor
 # (9a610266 "security: Refactor declaration of LSM hooks") and the BPF LSM
