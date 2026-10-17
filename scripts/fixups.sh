@@ -3,7 +3,7 @@
 # Fixups for helpers that the 5.10 BPF backport uses but this 4.14 tree lacks.
 #
 # The backport range (cc47ca5^..7b03162) was authored against PhoenixKernel's
-# 4.14 tree, which already carries a few small helpers that the PixelPlusUI
+# 4.14 tree, which already carries a few small helpers that the ArrowOS
 # tree does not.  The range does NOT add them (the commits that introduced
 # them are older than the range), so they must be re-added here.
 #
@@ -12,6 +12,9 @@
 #                                                    kernel/bpf/local_storage.c)
 #   * include/linux/skbuff.h : skb_increase_gso_size()/skb_decrease_gso_size()
 #                                                  (used by net/core/filter.c)
+#   * rename __atomic_add_unless() -> atomic_fetch_add_unless() (the range
+#     removes arm64's definition and relies on the generic fallback, which
+#     ArrowOS's older call sites do not use yet)
 #
 # Every step is guarded, so the script is idempotent and a no-op when the
 # helper is already present.

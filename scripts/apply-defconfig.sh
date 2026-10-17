@@ -54,7 +54,7 @@ CONFIG_BIG_CPU_MASK=112
 CONFIG_PRIME_CPU_MASK=128
 
 # ---------------------------------------------------------------------------
-# 5.10 BPF backport (PixelPlusUI guacamole)
+# 5.10 BPF backport (ArrowOS guacamole, arrow-12.1)
 # ---------------------------------------------------------------------------
 CONFIG_BPF_LSM=y
 CONFIG_BPF_PRELOAD=y

@@ -1,13 +1,20 @@
-name: Build guacamole kernel (PixelPlusUI + 5.10 BPF)
+name: Build guacamole kernel (ArrowOS + 5.10 BPF)
 
-# Builds the OnePlus 7 Pro (guacamole) kernel from
-#   https://github.com/PixelPlusUI-Devices/kernel_oneplus_guacamole  (tiramisu)
+# Builds the OnePlus 7 Pro (guacamole / sm8150) kernel from
+#   https://github.com/ArrowOS-Devices/android_kernel_oneplus_sm8150  (arrow-12.1, 4.14.274)
 # with the full 5.10 BPF backport cherry-picked from
 #   https://github.com/PhoenixKernel/linux  (android-4.14-phoenix)
 # (the exact range from 4.14_5.10bpf_commits.txt: cc47ca5^..7b03162)
 #
-# Adds BPF_LSM / BPF_PRELOAD / CONFIG_LSM, makes SELinux permissive by
-# default, and packages a TWRP/AnyKernel3 flashable zip.
+# Adds BPF_LSM / BPF_PRELOAD / CONFIG_LSM and makes SELinux permissive by
+# default (the target ColorOS15 boot.img already carries
+# androidboot.selinux=permissive as well).
+#
+# No root manager is added on purpose: no KernelSU, no SUSFS, no Magisk.
+#
+# The primary artifact is the raw arch/arm64/boot/Image.gz, which
+# tools/repack_bootimg.py drops straight into the target boot.img (keeping the
+# ROM's ramdisk and device-tree blob untouched).
 
 on:
   workflow_dispatch:
@@ -25,10 +32,14 @@ on:
     paths-ignore:
       - "**.md"
       - "legacy/**"
+      - "tools/**"
+
+permissions:
+  contents: write
 
 env:
-  KERNEL_REPO: https://github.com/PixelPlusUI-Devices/kernel_oneplus_guacamole
-  KERNEL_BRANCH: tiramisu
+  KERNEL_REPO: https://github.com/ArrowOS-Devices/android_kernel_oneplus_sm8150
+  KERNEL_BRANCH: arrow-12.1
   BPF_REPO: https://github.com/PhoenixKernel/linux
   BPF_BRANCH: android-4.14-phoenix
   # Exact range from 4.14_5.10bpf_commits.txt
@@ -36,6 +47,7 @@ env:
   BPF_END: 7b031620e7605c2cae5597bdc53f306e030ffd4a
   # shallow depth used when fetching the backport branch (range is 1024 commits)
   BPF_DEPTH: "1300"
+  ARTIFACT: guacamole-arrow12.1-bpf5.10
 
 jobs:
   build:
@@ -78,18 +90,53 @@ jobs:
           DEFCONFIG: ${{ github.event.inputs.defconfig || 'stock_defconfig' }}
         run: bash scripts/apply-defconfig.sh
 
-      - name: Compile kernel
+      - name: Compile kernel (Image.gz)
         env:
           DEFCONFIG: ${{ github.event.inputs.defconfig || 'stock_defconfig' }}
         run: bash scripts/build.sh
 
-      - name: Package AnyKernel3 zip (flashable from TWRP)
+      - name: Collect artifacts (Image.gz + AnyKernel3 zip)
         run: bash scripts/package.sh
 
-      - name: Upload flashable zip
+      - name: Upload kernel Image.gz
         uses: actions/upload-artifact@v4
         with:
-          name: guacamole-ppui-bpf5.10
-          path: dist/*.zip
+          name: ${{ env.ARTIFACT }}-Image.gz
+          path: |
+            dist/Image.gz
+            dist/kernel-rev.txt
+            dist/System.map
+            dist/.config
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload flashable AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}-anykernel3
+          path: dist/*.zip
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish latest kernel to a Release (stable download URL)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kernel-latest
+          name: guacamole ArrowOS 4.14 + 5.10 BPF backport (latest)
+          body: |
+            Built from `${{ env.KERNEL_REPO }}` @ `${{ env.KERNEL_BRANCH }}`
+            with the 5.10 BPF backport (`${{ env.BPF_START }}^..${{ env.BPF_END }}`).
+
+            * `Image.gz` — raw kernel, drop into the ColorOS15 boot.img with
+              `tools/repack_bootimg.py`
+            * `guacamole-*.zip` — AnyKernel3 flashable zip
+            * `System.map`, `.config`, `kernel-rev.txt` — reference
+
+            No root manager. SELinux permissive by default.
+          prerelease: true
+          files: |
+            dist/Image.gz
+            dist/System.map
+            dist/kernel-rev.txt
+            dist/*.zip
+          fail_on_unmatched_files: false

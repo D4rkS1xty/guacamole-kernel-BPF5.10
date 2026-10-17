@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Configure and build the ArrowOS guacamole (sm8150) kernel with the 5.10 BPF
+# backport applied.
+#
+# Only arch/arm64/boot/Image.gz is built:
+#
+#   * the target boot.img carries its own device-tree blob in the v2 header
+#     (a 4.25 MB concatenation of 15 DTBs), so no -dtb image is needed;
+#   * the target ROM has no kernel modules anywhere (its vendor partition
+#     ships no .ko files), and arrow-12.1's stock_defconfig builds every
+#     driver that matters as built-in -- its only =m entries are wil6210
+#     (60 GHz wifi), DVB/tspp (TV tuners), USB_GSPCA (webcams), MMC_TEST,
+#     MSM_RDBG, MSM_11AD, LLCC_PERFMON, IR_MSM_GENI and BRIDGE_NETFILTER,
+#     none of which guacamole loads.
+#
+# So the kernel is effectively monolithic and there is nothing to install into
+# the boot ramdisk.
+# ---------------------------------------------------------------------------
 set -euo pipefail
 
 : "${DEFCONFIG:?DEFCONFIG is not set}"
@@ -92,15 +110,27 @@ echo "CONFIG_LSM value: $(grep '^CONFIG_LSM=' "$KDIR/.config" || echo '<unset>')
 grep -q '^CONFIG_LSM=' "$KDIR/.config" || { echo "::error::CONFIG_LSM missing"; verify_ok=0; }
 echo "SELinux bootparam: $(grep '^CONFIG_SECURITY_SELINUX_BOOTPARAM' "$KDIR/.config" || echo '<unset>')"
 echo "SELinux develop : $(grep '^CONFIG_SECURITY_SELINUX_DEVELOP' "$KDIR/.config" || echo '<unset>')"
+echo "ROOT MANAGERS   : $(grep -E '^CONFIG_(KSU|SUSFS)' "$KDIR/.config" || echo 'none (expected)')"
 echo "::endgroup::"
 if [ "$verify_ok" != 1 ]; then
   echo "::error::required BPF/LSM config options were not applied"
   exit 1
 fi
 
-echo "===== make -j$(nproc) ====="
-"${MAKE[@]}" -j"$(nproc)" 2>&1 | tee -a "$LOG"
+echo "===== make -j$(nproc) Image.gz ====="
+"${MAKE[@]}" -j"$(nproc)" Image.gz 2>&1 | tee -a "$LOG"
+
+IMG="$KDIR/arch/arm64/boot/Image.gz"
+[ -f "$IMG" ] || { echo "::error::Image.gz was not produced"; ls -l "$KDIR/arch/arm64/boot/" || true; exit 1; }
 
 echo "::group::build output"
 ls -l "$KDIR/arch/arm64/boot/" || true
+gzip -t "$IMG" && echo "Image.gz: gzip integrity OK"
+echo "kernel release : $(cat "$KDIR/include/config/kernel.release" 2>/dev/null || echo '?')"
+echo "Image.gz size  : $(stat -c %s "$IMG")"
 echo "::endgroup::"
+
+# Record the exact kernel tree revision the image was built from, so the
+# packaging step can name the artifact after it.
+git -C "$KDIR" rev-parse HEAD > "$ROOT/kernel-rev.txt" 2>/dev/null || echo unknown > "$ROOT/kernel-rev.txt"
+echo "kernel rev: $(cat "$ROOT/kernel-rev.txt")"
