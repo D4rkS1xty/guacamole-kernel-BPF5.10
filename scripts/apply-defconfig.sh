@@ -4,7 +4,7 @@
 #
 #   CONFIG_BPF_LSM=y
 #   # CONFIG_BPF_PRELOAD is not set        (see the note in the appended block)
-#   CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf"
+#   CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,bpf"
 #   CONFIG_STUNE_ASSIST=y / CONFIG_CPUSET_ASSIST=y   (ArrowOS scheduler helpers)
 #
 # and make SELinux permissive by default.
@@ -71,7 +71,7 @@ CONFIG_BPF_LSM=y
 # BPF syscall, cgroup-attachable programs and LSM hook are unaffected.
 # CONFIG_BPF_PRELOAD is not set
 # CONFIG_BPF_PRELOAD_UMD is not set
-CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf"
+CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,bpf"
 
 # ---------------------------------------------------------------------------
 # ArrowOS scheduler helpers.  stock_defconfig sets both of these, and
@@ -84,7 +84,7 @@ CONFIG_CPUSET_ASSIST=y
 
 # SELinux: permissive by default
 CONFIG_SECURITY_SELINUX_BOOTPARAM=y
-CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0
+CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=1
 CONFIG_SECURITY_SELINUX_DEVELOP=y
 
 # ---------------------------------------------------------------------------
