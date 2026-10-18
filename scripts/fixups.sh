@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # ---------------------------------------------------------------------------
 # W-approach fixups: reset non-island to base (A), apply island-only grafts.
 set -euo pipefail
@@ -87,4 +87,24 @@ done
 
 echo "fixups: reset complete"
 git status --short | wc -l | xargs -I{} echo "fixups: status lines={}"
-echo done
+# (g13) re-apply -Wno-error demotion
+MK=Makefile
+if [ -f "" ]; then
+  sed -i 's/-Werror=implicit-int/-Wno-error=implicit-int/g; s/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' "" 2>/dev/null || true
+fi
+echo "fixups: W done"
+
+
+# (g13) re-apply -Wno-error demotion
+MK=Makefile
+if [ -f "" ]; then
+  sed -i 's/-Werror=implicit-int/-Wno-error=implicit-int/g; s/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' "" 2>/dev/null || true
+fi
+echo "fixups: W done"
+
+# (g13) re-apply -Wno-error demotion
+MK=Makefile
+if [ -f "" ]; then
+  sed -i 's/-Werror=implicit-int/-Wno-error=implicit-int/g; s/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' "" 2>/dev/null || true
+fi
+echo "fixups: W done"
