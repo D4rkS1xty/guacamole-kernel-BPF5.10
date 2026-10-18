@@ -579,20 +579,19 @@ if grep -q 'int cap, int audit);' "$SH_SEC" 2>/dev/null; then
   changed=1
 fi
 
-# (g7) security/selinux/include/classmap.h: retarget the capability guard.
-#      The endpoint's copy guards COMMON_CAP2_PERMS with "#if CAP_LAST_CAP >
-#      CAP_BPF", but CAP_BPF does not exist in this 4.14 uapi tree, so the
-#      preprocessor folds the comparison to false, fires the #error, and the
-#      resulting breakage in the generated flask.h shows up as every
-#      SECINITSID_* being undeclared.  Guard it on the last capability this
-#      tree actually defines; the endpoint's extra "perfmon"/"bpf" permission
-#      names are harmless (they only add av permission strings).
-CM=security/selinux/include/classmap.h
-if grep -q '^#if CAP_LAST_CAP > CAP_BPF$' "$CM" 2>/dev/null; then
-  echo "fixup: retargeting the classmap capability guard in $CM"
-  sed -i 's/^#if CAP_LAST_CAP > CAP_BPF$/#if CAP_LAST_CAP > CAP_AUDIT_READ/' "$CM"
-  changed=1
-fi
+# (g7) security/selinux/include/classmap.h is deliberately NOT touched.
+#      It came out of the merge as the endpoint's copy, and the endpoint is
+#      the consistent side here: the range's prerequisite series also added
+#      CAP_PERFMON (38) and CAP_BPF (39) to include/uapi/linux/capability.h,
+#      so CAP_LAST_CAP == CAP_BPF == 39, COMMON_CAP2_PERMS already lists
+#      "perfmon","bpf", and the maintenance guard
+#          #if CAP_LAST_CAP > CAP_BPF
+#          #error New capability defined, please update COMMON_CAP2_PERMS.
+#      evaluates false.  An earlier attempt retargeted that guard at
+#      CAP_AUDIT_READ, which turned the assertion on (39 > 37) and broke
+#      scripts/selinux/genheaders and mdp -- the flask.h generators -- with
+#      exactly this #error.  The invariant is checked in the verification
+#      gate below instead of being rewritten here.
 
 # (g8) init/main.c: drop the arch_cpu_finalize_init() call.
 #      The range's start_kernel calls it, but no arm64 file in this tree
@@ -794,10 +793,13 @@ if grep -qE '\bsha_init\b|\bsha_transform\b|\bSHA_WORKSPACE_WORDS\b' drivers/cha
 else
   echo "ok: drivers/char/random.c uses the sha1_* cryptohash names"
 fi
-if grep -q '^#if CAP_LAST_CAP > CAP_BPF$' security/selinux/include/classmap.h; then
-  vfail=1; echo "::error::classmap.h capability guard still references the non-existent CAP_BPF"
+if grep -q '^#if CAP_LAST_CAP > CAP_BPF$' security/selinux/include/classmap.h \
+   && grep -q '^#define CAP_BPF[[:space:]]*39$' include/uapi/linux/capability.h \
+   && grep -q '^#define CAP_LAST_CAP[[:space:]]*CAP_BPF$' include/uapi/linux/capability.h \
+   && grep -q '"perfmon", "bpf"' security/selinux/include/classmap.h; then
+  echo "ok: classmap capability list is consistent with the uapi capability set"
 else
-  echo "ok: classmap.h capability guard retargeted"
+  vfail=1; echo "::error::classmap.h / uapi capability.h are inconsistent; genheaders would fail"
 fi
 if grep -q 'arch_cpu_finalize_init' init/main.c; then
   vfail=1; echo "::error::init/main.c still calls arch_cpu_finalize_init()"
