@@ -6,9 +6,9 @@ name: Build guacamole kernel (ArrowOS + 5.10 BPF)
 #   https://github.com/PhoenixKernel/linux  (android-4.14-phoenix)
 # (the exact range from 4.14_5.10bpf_commits.txt: cc47ca5^..7b03162)
 #
-# Adds BPF_LSM / BPF_PRELOAD / CONFIG_LSM and makes SELinux permissive by
-# default (the target ColorOS15 boot.img already carries
-# androidboot.selinux=permissive as well).
+# Adds BPF_LSM / CONFIG_LSM (BPF_PRELOAD stays off -- see apply-defconfig.sh)
+# and makes SELinux permissive by default (the target ColorOS15 boot.img
+# already carries androidboot.selinux=permissive as well).
 #
 # No root manager is added on purpose: no KernelSU, no SUSFS, no Magisk.
 #

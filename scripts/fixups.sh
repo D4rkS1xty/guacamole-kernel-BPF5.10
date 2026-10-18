@@ -280,7 +280,6 @@ restore_endpoint \
   net/ipv4/tcp_bpf.c \
   net/ipv4/bpf_tcp_ca.c \
   kernel/trace/bpf_trace.c \
-  kernel/trace/trace_event_perf.c \
   arch/arm64/net/bpf_jit_comp.c \
   security/bpf
 
@@ -374,6 +373,331 @@ if [ "${#legacy_cdata[@]}" -gt 0 ]; then
   changed=1
 fi
 
+# ===========================================================================
+# (g) Repair the remaining "-X theirs" hybrids.
+#
+# "-X theirs" is the right conflict policy for the BPF core, but it is wrong
+# wherever an incoming hunk belongs to a prerequisite whose other half never
+# reached this tree: the file then carries the endpoint's declarations next to
+# ArrowOS's definitions (or the reverse) and nothing compiles.  Every case
+# below was diagnosed from the run-#3 compiler log, and for every one of them
+# exactly one side is internally consistent.
+#
+# backport-bpf.sh tags the pristine ArrowOS tip as the "base" branch before it
+# starts cherry-picking, so ArrowOS's own copy is always reachable.
+# ===========================================================================
+ARROW_BASE_REF="${ARROW_BASE_REF:-base}"
+if ! git rev-parse --verify -q "${ARROW_BASE_REF}^{commit}" >/dev/null 2>&1; then
+  ARROW_BASE_REF="$(git rev-parse --verify -q 'origin/arrow-12.1^{commit}' 2>/dev/null || true)"
+fi
+if [ -z "$ARROW_BASE_REF" ]; then
+  echo "::error::cannot resolve the ArrowOS base ref (tried 'base' and origin/arrow-12.1)"
+  exit 1
+fi
+echo "ArrowOS base ref: $ARROW_BASE_REF"
+
+restore_arrow() {
+  local f
+  for f in "$@"; do
+    if ! git cat-file -e "$ARROW_BASE_REF:$f" 2>/dev/null; then
+      echo "::warning::restore_arrow: $f not present in $ARROW_BASE_REF, skipped"
+      continue
+    fi
+    if git diff --quiet "$ARROW_BASE_REF" -- "$f" 2>/dev/null; then
+      continue
+    fi
+    echo "fixup: restoring $f from the ArrowOS base ($ARROW_BASE_REF)"
+    git checkout "$ARROW_BASE_REF" -- "$f"
+    changed=1
+  done
+}
+
+# (g1) Endpoint files this tree references but never received.  None of them
+#      is created by a commit in the range, so the cherry-pick had nothing to
+#      apply and they are simply absent.
+#
+#      include/net/netns/xdp.h -- the merge kept the endpoint's
+#      net/net_namespace.h, which includes it; single largest source of
+#      "file not found" diagnostics in run #3 (717 of them, in every
+#      translation unit that pulls in the netns headers).
+#
+#      include/linux/xarray.h -- lib/idr.c and include/linux/idr.h came out of
+#      the merge as the endpoint's 5.10 implementation, which sits on
+#      Phoenix's lock-only xarray stub (a full 5.10 xarray is a much larger
+#      change and would drag in radix-tree rework this tree does not have).
+restore_endpoint \
+  include/net/netns/xdp.h \
+  include/linux/xarray.h
+
+# (g2) ArrowOS's own copy is the only consistent one.  Each of these files is
+#      either untouched by the range (so the merge half-applied something
+#      unrelated) or a hybrid whose reference side does not exist in this
+#      tree.  What they have in common is that ArrowOS's version only ever
+#      depended on ArrowOS's headers, which are still the headers around them.
+#
+#      kernel/umh.c + include/linux/umh.h
+#          The merge took the endpoint's copy, which uses call_usermodehelper
+#          's 5.10 "struct file *" flow (subprocess_info::file, do_execve_file,
+#          PF_UMH).  Nothing in this tree can provide those: the only caller of
+#          the new API is kernel/usermode_driver.c, which is built only when
+#          CONFIG_USERMODE_DRIVER=y -- and that symbol is selected by
+#          CONFIG_BPF_PRELOAD, which this defconfig no longer sets.
+#      kernel/signal.c
+#          Carries the pid-rework hunks (cgroup_task_frozen, JOBCTL_TRAP_FREEZE,
+#          add_to_oom_reaper) without the cgroup and mm changes they belong to.
+#      kernel/trace/blktrace.c
+#          The endpoint's version drives the 5.10 kernfs node-id API with the
+#          wrong arity against ArrowOS's kernfs headers (8 pointer-to-integer
+#          conversion errors).  ArrowOS's copy is the one whose 10 uses match.
+#      kernel/trace/trace_event_perf.c
+#          Taken from the endpoint by step (d); it calls
+#          create_local_trace_uprobe() and reads uprobe_path/probe_offset,
+#          which live in the endpoint's trace_uprobe.c and uapi perf_event.h.
+#          Pulling those two in as well would drag a third and a fourth file
+#          behind them; ArrowOS's copy works with the perf machinery this tree
+#          actually has.
+#      drivers/char/random.c
+#          The merge kept ArrowOS's body but took the endpoint's renamed
+#          cryptohash primitives (sha_init -> sha1_init) and its sysctl
+#          signature, which produced a redefinition of 'buf'.  ArrowOS's copy
+#          plus the three sha1 renames below is the self-consistent pair.
+restore_arrow \
+  include/linux/umh.h \
+  kernel/umh.c \
+  kernel/signal.c \
+  kernel/trace/blktrace.c \
+  kernel/trace/trace_event_perf.c \
+  drivers/char/random.c
+
+# (g2a) drivers/char/random.c was written against ArrowOS's cryptohash.h; the
+#       rest of the tree (lib/sha1.c, the crypto drivers) follows the
+#       endpoint's renaming, so keep ArrowOS's file and rename its three
+#       primitives to match.
+RC=drivers/char/random.c
+if [ -f "$RC" ] && grep -qE '\bsha_init\b|\bsha_transform\b|\bSHA_WORKSPACE_WORDS\b' "$RC"; then
+  echo "fixup: renaming sha_init/sha_transform/SHA_WORKSPACE_WORDS in $RC"
+  sed -i -E \
+    -e 's/\bsha_init\b/sha1_init/g' \
+    -e 's/\bsha_transform\b/sha1_transform/g' \
+    -e 's/\bSHA_WORKSPACE_WORDS\b/SHA1_WORKSPACE_WORDS/g' "$RC"
+  changed=1
+fi
+
+# (g3) include/linux/skbuff.h: restore ArrowOS's 8-argument
+#      __skb_flow_dissect() declaration.
+#
+#      The declaration came out of the merge with the endpoint's
+#      net-namespaced 9-argument form, while net/core/flow_dissector.c is
+#      ArrowOS's 8-argument definition (the range only added the BPF entry
+#      points to that file) and all three inline wrappers plus the one call
+#      inside flow_dissector.c pass 8 arguments.  2249 of run #3's
+#      diagnostics are "too few arguments, expected 9, have 8"; no file in this
+#      tree calls the net-namespaced form, so the parameter goes back.
+SB=include/linux/skbuff.h
+if [ -f "$SB" ] && grep -q '^bool __skb_flow_dissect(const struct net \*net,$' "$SB"; then
+  echo "fixup: restoring ArrowOS's 8-argument __skb_flow_dissect() declaration in $SB"
+  perl -0pi -e 's/bool __skb_flow_dissect\(const struct net \*net,\n[ \t]*const struct sk_buff \*skb,/bool __skb_flow_dissect(const struct sk_buff *skb,/' "$SB"
+  if grep -q '^bool __skb_flow_dissect(const struct net \*net,$' "$SB"; then
+    echo "::warning::could not rewrite the __skb_flow_dissect() declaration in $SB"
+  else
+    changed=1
+  fi
+fi
+
+# (g4) include/linux/sched.h: put ArrowOS's wake_up_idle helpers back.
+#      fs/proc/base.c and drivers/mmc/core/queue.c call sched_get_wake_up_idle(),
+#      sched_set_wake_up_idle() and set_wake_up_idle(); all three are
+#      ArrowOS-owned static inlines that live in include/linux/sched.h, which
+#      the range rewrote without them (their backing PF_WAKE_UP_IDLE flag did
+#      survive the merge, so the helpers only need to be re-added).
+SH=include/linux/sched.h
+if [ -f "$SH" ] && ! grep -q 'sched_get_wake_up_idle' "$SH"; then
+  wakeup_block="$(git show "$ARROW_BASE_REF:$SH" | awk '
+    /^static inline u32 sched_get_wake_up_idle\(struct task_struct \*p\)$/ { f=1 }
+    f { print; if ($0 == "}") { c++; if (c == 3) exit } }')"
+  if [ -n "$wakeup_block" ] && echo "$wakeup_block" | grep -q 'set_wake_up_idle'; then
+    echo "fixup: re-adding the wake_up_idle helpers to $SH"
+    awk -v blk="$wakeup_block" '
+      { a[NR] = $0 }
+      END {
+        for (i = NR; i >= 1; i--) if (a[i] ~ /^#endif/) { ins = i; break }
+        for (i = 1; i <= NR; i++) {
+          if (i == ins) { print ""; print blk; print "" }
+          print a[i]
+        }
+      }' "$SH" > "$SH.tmp"
+    if cmp -s "$SH" "$SH.tmp"; then
+      rm -f "$SH.tmp"
+    else
+      mv "$SH.tmp" "$SH"
+      changed=1
+    fi
+  else
+    echo "::warning::could not extract the wake_up_idle helpers from $ARROW_BASE_REF:$SH"
+  fi
+fi
+
+# (g5) fs/proc/proc_sysctl.c: include linux/bpf-cgroup.h.
+#      The endpoint wired BPF_CGROUP_RUN_PROG_SYSCTL() into the sysctl write
+#      path but the include that declares it did not survive the merge, so the
+#      macro is an implicit function.  Completing the include keeps the cgroup
+#      sysctl program hook working instead of deleting the hook call.
+PS=fs/proc/proc_sysctl.c
+if [ -f "$PS" ] && grep -q 'BPF_CGROUP_RUN_PROG_SYSCTL' "$PS" \
+   && ! grep -qE '^#include <linux/bpf-cgroup\.h>' "$PS"; then
+  echo "fixup: adding #include <linux/bpf-cgroup.h> to $PS"
+  if grep -qE '^#include <linux/sysctl\.h>$' "$PS"; then
+    sed -i "0,/^#include <linux\/sysctl\.h>$/{s|^#include <linux/sysctl\.h>$|#include <linux/sysctl.h>\n#include <linux/bpf-cgroup.h>|}" "$PS"
+  else
+    sed -i "0,/^#include /{s|^#include |#include <linux/bpf-cgroup.h>\n#include |}" "$PS"
+  fi
+  changed=1
+fi
+
+# (g6) security/commoncap.c + include/linux/security.h: rename cap_capable()'s
+#      fourth argument to match the capable LSM hook.
+#      include/linux/lsm_hook_defs.h (restored from the endpoint in step (d))
+#      declares the hook with "unsigned int opts", while ArrowOS's cap_capable
+#      still takes "int audit", which clang reports as
+#          incompatible function pointer types initializing
+#          'int (*)(const struct cred *, struct user_namespace *, int, unsigned int)'
+#      at LSM_HOOK_INIT(capable, cap_capable).  ArrowOS's own cap_capable()
+#      stays -- unlike the endpoint's, it still carries the
+#      CONFIG_ANDROID_PARANOID_NETWORK AID_NET_RAW/AID_NET_ADMIN group checks --
+#      it just takes the argument under the name and type the hook expects.
+CC_SRC=security/commoncap.c
+if grep -q '^[[:space:]]*int cap, int audit)$' "$CC_SRC" 2>/dev/null; then
+  echo "fixup: renaming cap_capable()'s argument to 'unsigned int opts' in $CC_SRC"
+  perl -0pi -e 's/int cap_capable\(const struct cred \*cred, struct user_namespace \*targ_ns,\n[ \t]*int cap, int audit\)/int cap_capable(const struct cred *cred, struct user_namespace *targ_ns,\n\t\tint cap, unsigned int opts)/' "$CC_SRC"
+  perl -0pi -e 's/return __cap_capable\(cred, targ_ns, cap, audit\);/return __cap_capable(cred, targ_ns, cap, opts);/' "$CC_SRC"
+  changed=1
+fi
+SH_SEC=include/linux/security.h
+if grep -q 'int cap, int audit);' "$SH_SEC" 2>/dev/null; then
+  echo "fixup: updating the cap_capable() prototype in $SH_SEC"
+  perl -0pi -e 's/(extern int cap_capable\(const struct cred \*cred, struct user_namespace \*ns,\n[ \t]*int cap, )int audit\);/${1}unsigned int opts);/' "$SH_SEC"
+  changed=1
+fi
+
+# (g7) security/selinux/include/classmap.h: retarget the capability guard.
+#      The endpoint's copy guards COMMON_CAP2_PERMS with "#if CAP_LAST_CAP >
+#      CAP_BPF", but CAP_BPF does not exist in this 4.14 uapi tree, so the
+#      preprocessor folds the comparison to false, fires the #error, and the
+#      resulting breakage in the generated flask.h shows up as every
+#      SECINITSID_* being undeclared.  Guard it on the last capability this
+#      tree actually defines; the endpoint's extra "perfmon"/"bpf" permission
+#      names are harmless (they only add av permission strings).
+CM=security/selinux/include/classmap.h
+if grep -q '^#if CAP_LAST_CAP > CAP_BPF$' "$CM" 2>/dev/null; then
+  echo "fixup: retargeting the classmap capability guard in $CM"
+  sed -i 's/^#if CAP_LAST_CAP > CAP_BPF$/#if CAP_LAST_CAP > CAP_AUDIT_READ/' "$CM"
+  changed=1
+fi
+
+# (g8) init/main.c: drop the arch_cpu_finalize_init() call.
+#      The range's start_kernel calls it, but no arm64 file in this tree
+#      defines it (it is part of the 5.10 arm64 bring-up the range did not
+#      carry), which surfaces as an implicit function declaration.
+IM=init/main.c
+if [ -f "$IM" ] && grep -q 'arch_cpu_finalize_init' "$IM"; then
+  if ! grep -rq 'arch_cpu_finalize_init' arch include 2>/dev/null; then
+    echo "fixup: dropping the arch_cpu_finalize_init() call from $IM"
+    sed -i -E '/^[[:space:]]*arch_cpu_finalize_init\(\);[[:space:]]*$/d' "$IM"
+    changed=1
+  fi
+fi
+
+# (g9) init/Kconfig: put config SCHED_CORE_CTL back.
+#      The merge lost the symbol (ArrowOS's own scheduler expects it and
+#      stock_defconfig sets it), so olddefconfig would silently drop
+#      CONFIG_SCHED_CORE_CTL=y and disable Qualcomm core control.  Re-insert
+#      ArrowOS's block right after the CGROUPS menu it used to live in.
+KCONF=init/Kconfig
+if [ -f "$KCONF" ] && ! grep -q '^config SCHED_CORE_CTL$' "$KCONF"; then
+  core_ctl_block="$(git show "$ARROW_BASE_REF:$KCONF" | awk '
+    /^config SCHED_CORE_CTL$/ { f=1 }
+    f { if (started && (/^config / || /^menuconfig /)) exit; print; started = 1 }')"
+  if [ -n "$core_ctl_block" ] && echo "$core_ctl_block" | grep -q 'QTI Core Control'; then
+    echo "fixup: restoring config SCHED_CORE_CTL to $KCONF"
+    awk -v blk="$core_ctl_block" '
+      { a[NR] = $0 }
+      END {
+        for (i = 1; i <= NR; i++) if (a[i] ~ /^endif # CGROUPS[[:space:]]*$/) { ins = i; break }
+        for (i = 1; i <= NR; i++) { print a[i]; if (i == ins) { print ""; print blk } }
+      }' "$KCONF" > "$KCONF.tmp"
+    if cmp -s "$KCONF" "$KCONF.tmp"; then
+      rm -f "$KCONF.tmp"
+    else
+      mv "$KCONF.tmp" "$KCONF"
+      changed=1
+    fi
+  else
+    echo "::warning::could not extract config SCHED_CORE_CTL from $ARROW_BASE_REF:$KCONF"
+  fi
+fi
+
+# (g10) techpack audio: the CAF code assigns one enumeration type to another in
+#       two places, which clang -20 turns into -Werror=enum-conversion.  Both
+#       conversions are lossless (the enum ranges line up), so an explicit cast
+#       is the fix; the code itself is ArrowOS's and untouched by the range.
+for cpe in techpack/audio/asoc/codecs/wcd_cpe_services.c \
+           techpack/audio/4.0/asoc/codecs/wcd_cpe_services.c; do
+  [ -f "$cpe" ] || continue
+  if grep -q 'notif\.result = result;' "$cpe"; then
+    echo "fixup: adding explicit enum conversions to $cpe"
+    sed -i -E \
+      -e 's/\bnotif\.result = result;/notif.result = (enum cmi_api_result)result;/' \
+      -e 's/\brc = cpe_send_msg_to_inbox\(/rc = (enum cpe_process_result)cpe_send_msg_to_inbox(/' "$cpe"
+    changed=1
+  fi
+done
+
+# (g11) drivers/power/supply/qcom/smb5-lib.c: pm_schg_dcdc_configure_vsysmin()
+#       lost its return type (clang -20 rejects implicit int).  It is called
+#       only from within the same file, so make it a file-local function the
+#       way its neighbours are.
+SMB=drivers/power/supply/qcom/smb5-lib.c
+if [ -f "$SMB" ] && grep -qE '^pm_schg_dcdc_configure_vsysmin\(' "$SMB"; then
+  echo "fixup: giving pm_schg_dcdc_configure_vsysmin() a return type in $SMB"
+  sed -i -E 's/^pm_schg_dcdc_configure_vsysmin\(/static int pm_schg_dcdc_configure_vsysmin(/' "$SMB"
+  changed=1
+fi
+
+# (g12) ANSI prototypes in the vendor drivers.  Several ArrowOS-era CAF files
+#       define functions as "type name()" and declare them as "type name();",
+#       which clang -20 rejects under -Werror=strict-prototypes (both files
+#       are byte-identical to the ArrowOS base -- these are upstream CAF bugs
+#       that older clang let through, not merge damage).  Only rewrite a
+#       definition when the next line opens its body, and a declaration when
+#       the line is exactly a prototype-less one, so statements such as
+#       "return foo();" can never be touched.
+fix_ansi_prototypes() {
+  local f
+  for f in $(find "$@" -type f \( -name '*.c' -o -name '*.h' \) 2>/dev/null | sort -u); do
+    [ -f "$f" ] || continue
+    awk '
+      { l[NR] = $0 }
+      END {
+        for (i = 1; i <= NR; i++) {
+          if (l[i] ~ /^[A-Za-z_][A-Za-z_0-9 \*]*\(\)$/ && l[i + 1] ~ /^[ \t]*\{/) {
+            sub(/\(\)$/, "(void)", l[i]); n++
+          } else if (l[i] ~ /^[A-Za-z_][A-Za-z_0-9 \*]*\(\);$/) {
+            sub(/\(\);$/, "(void);", l[i]); n++
+          }
+        }
+        for (i = 1; i <= NR; i++) print l[i]
+      }' "$f" > "$f.fixups-tmp"
+    if ! cmp -s "$f" "$f.fixups-tmp"; then
+      echo "fixup: adding (void) to prototype-less definitions in $f"
+      mv "$f.fixups-tmp" "$f"
+      changed=1
+    else
+      rm -f "$f.fixups-tmp"
+    fi
+  done
+}
+fix_ansi_prototypes drivers/input/touchscreen/st techpack/audio drivers/power/supply/qcom
+
 # --- merge-artifact scan (report only) -------------------------------------
 # The cherry-pick resolves every conflict with "-X theirs", which can leave a
 # Kbuild file with an orphan or missing conditional; make only ever reports the
@@ -407,6 +731,114 @@ mapfile -t markers < <(grep -rlE '^(<<<<<<< |>>>>>>> )' arch kernel mm fs net \
 if [ "${#markers[@]}" -gt 0 ]; then
   echo "::warning::conflict markers left in ${#markers[@]} file(s):"
   printf '  %s\n' "${markers[@]}"
+fi
+echo "::endgroup::"
+
+# ===========================================================================
+# Verification gate.  Each entry is a property the compile step is known to
+# depend on; if any of them did not land, the build would only fail ~20
+# minutes into "make", so fail here instead and say why.
+# ===========================================================================
+echo "::group::fixup verification"
+vfail=0
+
+if grep -q '^bool __skb_flow_dissect(const struct net \*net,$' include/linux/skbuff.h; then
+  vfail=1; echo "::error::__skb_flow_dissect() declaration is still the 9-argument form"
+else
+  echo "ok: __skb_flow_dissect() declaration is back to 8 arguments"
+fi
+if [ -f include/net/netns/xdp.h ] && grep -q 'struct netns_xdp' include/net/netns/xdp.h; then
+  echo "ok: include/net/netns/xdp.h present"
+else
+  vfail=1; echo "::error::include/net/netns/xdp.h is still missing"
+fi
+if [ -f include/linux/xarray.h ] && grep -q 'xa_lock' include/linux/xarray.h; then
+  echo "ok: include/linux/xarray.h stub present"
+else
+  vfail=1; echo "::error::include/linux/xarray.h stub is still missing"
+fi
+if grep -q '^config SCHED_CORE_CTL$' init/Kconfig; then
+  echo "ok: init/Kconfig keeps config SCHED_CORE_CTL"
+else
+  vfail=1; echo "::error::init/Kconfig lost config SCHED_CORE_CTL"
+fi
+if grep -q 'create_local_trace_uprobe\|uprobe_path\|probe_offset' kernel/trace/trace_event_perf.c; then
+  vfail=1; echo "::error::kernel/trace/trace_event_perf.c still calls endpoint-only uprobe helpers"
+else
+  echo "ok: kernel/trace/trace_event_perf.c matches the perf machinery in this tree"
+fi
+if grep -qE '\bsha_init\b|\bsha_transform\b|\bSHA_WORKSPACE_WORDS\b' drivers/char/random.c; then
+  vfail=1; echo "::error::drivers/char/random.c still uses the old sha_* cryptohash names"
+else
+  echo "ok: drivers/char/random.c uses the sha1_* cryptohash names"
+fi
+if grep -q '^#if CAP_LAST_CAP > CAP_BPF$' security/selinux/include/classmap.h; then
+  vfail=1; echo "::error::classmap.h capability guard still references the non-existent CAP_BPF"
+else
+  echo "ok: classmap.h capability guard retargeted"
+fi
+if grep -q 'arch_cpu_finalize_init' init/main.c; then
+  vfail=1; echo "::error::init/main.c still calls arch_cpu_finalize_init()"
+else
+  echo "ok: init/main.c no longer calls arch_cpu_finalize_init()"
+fi
+cap_bad=0
+if grep -A1 '^int cap_capable(' security/commoncap.c | grep -q 'int cap, int audit'; then
+  cap_bad=1
+fi
+if grep -A1 'extern int cap_capable(' include/linux/security.h | grep -q 'int cap, int audit'; then
+  cap_bad=1
+fi
+if [ "$cap_bad" -ne 0 ]; then
+  vfail=1; echo "::error::cap_capable() still takes 'int audit'"
+else
+  echo "ok: cap_capable() takes 'unsigned int opts'"
+fi
+if grep -q 'sched_get_wake_up_idle' include/linux/sched.h && grep -q 'PF_WAKE_UP_IDLE' include/linux/sched.h; then
+  echo "ok: include/linux/sched.h carries the wake_up_idle helpers"
+else
+  vfail=1; echo "::error::include/linux/sched.h is still missing the wake_up_idle helpers"
+fi
+if grep -rq '__skb_flow_dissect(net' net kernel 2>/dev/null; then
+  vfail=1; echo "::error::a caller still uses the net-namespaced __skb_flow_dissect() form"
+else
+  echo "ok: no caller uses the net-namespaced __skb_flow_dissect() form"
+fi
+if [ -f kernel/bpf/sockmap.c ] || grep -q 'sockmap\.o' net/core/Makefile kernel/bpf/Makefile 2>/dev/null; then
+  vfail=1; echo "::error::kernel/bpf/sockmap.c (the A-only 4.14 sockmap) is back"
+else
+  echo "ok: kernel/bpf/sockmap.c still removed"
+fi
+proto_artifacts="$(grep -rn '()void)' arch kernel mm fs net drivers security init lib block ipc \
+  crypto scripts include techpack 2>/dev/null | head -5 || true)"
+if [ -n "$proto_artifacts" ]; then
+  vfail=1; echo "::error::()void) artifacts left by the prototype fixup:"; echo "$proto_artifacts"
+else
+  echo "ok: no mangled prototypes"
+fi
+if grep -q '^struct device \*getDev(void)$' drivers/input/touchscreen/st/fts_lib/ftsIO.c \
+   && grep -q '^char \*timestamp(void)$' drivers/input/touchscreen/st/fts_lib/ftsTime.c; then
+  echo "ok: ST touchscreen getDev()/timestamp() are prototyped"
+else
+  vfail=1; echo "::error::ST touchscreen prototype-less definitions remain"
+fi
+symlink_bad=0
+for sl in techpack/audio/include/soc/internal.h techpack/audio/soc/core.h \
+          techpack/audio/soc/pinctrl-utils.h; do
+  [ -e "$sl" ] || continue
+  # The prototype fixup must never turn these symlinks (to drivers/base and
+  # drivers/pinctrl) into regular files; git's recorded mode is the truth even
+  # where Windows checks symlinks out as text.
+  git ls-files -s "$sl" 2>/dev/null | grep -q '^120000' || symlink_bad=1
+done
+if [ "$symlink_bad" -ne 0 ]; then
+  vfail=1; echo "::error::a techpack symlink was converted to a regular file"
+else
+  echo "ok: techpack symlinks untouched"
+fi
+if [ "$vfail" -ne 0 ]; then
+  echo "::error::one or more fixups did not apply; refusing to continue with a tree that is known not to build"
+  exit 1
 fi
 echo "::endgroup::"
 

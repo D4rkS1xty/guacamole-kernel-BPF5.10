@@ -3,8 +3,9 @@
 # Add the 5.10-BPF related options to the device defconfig.
 #
 #   CONFIG_BPF_LSM=y
-#   CONFIG_BPF_PRELOAD=y
+#   # CONFIG_BPF_PRELOAD is not set        (see the note in the appended block)
 #   CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf"
+#   CONFIG_STUNE_ASSIST=y / CONFIG_CPUSET_ASSIST=y   (ArrowOS scheduler helpers)
 #
 # and make SELinux permissive by default.
 #
@@ -26,8 +27,11 @@ sed -i -E \
   -e '/^CONFIG_BPF_LSM=/d' \
   -e '/^# CONFIG_BPF_LSM is not set/d' \
   -e '/^CONFIG_BPF_PRELOAD=/d' \
+  -e '/^# CONFIG_BPF_PRELOAD is not set/d' \
   -e '/^CONFIG_BPF_PRELOAD_UMD=/d' \
   -e '/^# CONFIG_BPF_PRELOAD_UMD is not set/d' \
+  -e '/^CONFIG_STUNE_ASSIST=/d' \
+  -e '/^CONFIG_CPUSET_ASSIST=/d' \
   -e '/^CONFIG_LSM=/d' \
   -e '/^CONFIG_SECURITY_SELINUX_BOOTPARAM=/d' \
   -e '/^# CONFIG_SECURITY_SELINUX_BOOTPARAM is not set/d' \
@@ -59,12 +63,24 @@ CONFIG_PRIME_CPU_MASK=128
 # 5.10 BPF backport (ArrowOS guacamole, arrow-12.1)
 # ---------------------------------------------------------------------------
 CONFIG_BPF_LSM=y
-CONFIG_BPF_PRELOAD=y
-# The preload user-mode driver is a module (kernel/bpf/preload/), and this build
-# only produces arch/arm64/boot/Image.gz, so nothing would be built from it.
-# Pin it off so the defconfig is not sensitive to the Kconfig default.
+# BPF_PRELOAD is deliberately off.  All it buys is kernel-internal BPF
+# iterators pinned into bpffs, and selecting it drags in
+# CONFIG_USERMODE_DRIVER -> kernel/usermode_driver.c -> the 5.10
+# call_usermodehelper("struct file *") flow, none of which this 4.14 base can
+# supply (see fixups.sh).  Nothing else in the kernel depends on it, and the
+# BPF syscall, cgroup-attachable programs and LSM hook are unaffected.
+# CONFIG_BPF_PRELOAD is not set
 # CONFIG_BPF_PRELOAD_UMD is not set
 CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf"
+
+# ---------------------------------------------------------------------------
+# ArrowOS scheduler helpers.  stock_defconfig sets both of these, and
+# ArrowOS's own kernel/sched/tune.c and kernel/cgroup/cpuset.c use them
+# unconditionally, so leaving them out would be a guaranteed compile break:
+# they were never optional in this tree.
+# ---------------------------------------------------------------------------
+CONFIG_STUNE_ASSIST=y
+CONFIG_CPUSET_ASSIST=y
 
 # SELinux: permissive by default
 CONFIG_SECURITY_SELINUX_BOOTPARAM=y
