@@ -200,6 +200,180 @@ if grep -qE '^READELF[[:space:]]*=[[:space:]]*\$\(CROSS_COMPILE\)readelf[[:space
   fi
 fi
 
+# --- 5.10 BPF cluster: restore the endpoint's files wholesale --------------
+# The range was authored against PhoenixKernel's tree, so for the files that
+# make up the BPF core the "-X theirs" cherry-pick still leaves a hybrid: git
+# keeps ArrowOS's hunks next to the incoming ones.  Concretely, the merged
+# include/linux/filter.h has no bpf_compute_data_pointers() while the incoming
+# net/core/filter.c calls the 5.10 helpers, the merged kernel/bpf/*.c mix the
+# 5.10 verifier with the 4.14 map/syscall internals, and so on.  Each endpoint
+# file is self-consistent by construction (it is what PhoenixKernel builds),
+# so take those files wholesale.  Files where ArrowOS/CAF code *must* win
+# (include/net/sock.h, net/core/dev.c, kernel/sysctl.c, security/selinux,
+# include/linux/lsm_hooks.h, include/linux/cgroup.h, net/tls/*) are
+# deliberately not listed.
+: "${BPF_END:?BPF_END not set}"
+
+# (a) kernel/bpf/ as a whole, so the verifier, syscall, btf, trampoline,
+#     iterators, devmap/cpumap, struct-ops, LSM and preload sources all match
+#     the endpoint's include/linux/bpf*.h.  git checkout <tree> -- <dir> also
+#     brings in the pre-range files the range's Makefile references but never
+#     created (disasm.c, offload.c, sysfs_btf.c).
+if git cat-file -e "$BPF_END:kernel/bpf/Makefile" 2>/dev/null; then
+  if ! git diff --quiet "$BPF_END" -- kernel/bpf 2>/dev/null; then
+    echo "fixup: restoring kernel/bpf/ from the backport endpoint"
+    git checkout "$BPF_END" -- kernel/bpf
+    changed=1
+  fi
+  # Drop files the endpoint does not carry (the 4.14-only kernel/bpf/sockmap.c,
+  # whose CONFIG_STREAM_PARSER Makefile line is gone in the endpoint).
+  while IFS= read -r f; do
+    [ -e "$f" ] || continue
+    if git cat-file -e "$BPF_END:$f" 2>/dev/null; then
+      continue
+    fi
+    echo "fixup: removing $f (not present at the backport endpoint)"
+    git rm -q -f -- "$f" || true
+    changed=1
+  done < <(git ls-files -- kernel/bpf)
+else
+  echo "::warning::kernel/bpf/Makefile missing at $BPF_END"
+fi
+
+# (b) the headers and the net/ sources the rest of the kernel includes.
+#     include/net/page_pool.h is a new file the range's net/core/xdp.c and
+#     kernel/bpf/{devmap,cpumap}.c need; CONFIG_PAGE_POOL stays unset, and its
+#     page_pool_* bodies are #ifdef CONFIG_PAGE_POOL, so only the inline
+#     accessors are used.
+restore_endpoint \
+  include/linux/bpf.h \
+  include/linux/bpf-cgroup.h \
+  include/linux/bpf_verifier.h \
+  include/linux/bpf_types.h \
+  include/linux/bpf_lsm.h \
+  include/linux/bpf_local_storage.h \
+  include/linux/bpf-netns.h \
+  include/linux/btf.h \
+  include/linux/btf_ids.h \
+  include/linux/filter.h \
+  include/linux/skmsg.h \
+  include/linux/bpfilter.h \
+  include/linux/bpf_trace.h \
+  include/linux/lsm_hook_defs.h \
+  include/uapi/linux/bpf.h \
+  include/uapi/linux/btf.h \
+  include/uapi/linux/bpf_perf_event.h \
+  include/uapi/asm-generic/bpf_perf_event.h \
+  include/net/bpf_sk_storage.h \
+  include/net/netns/bpf.h \
+  include/net/xdp.h \
+  include/net/xdp_sock.h \
+  include/net/page_pool.h \
+  include/trace/events/xdp.h \
+  net/core/filter.c \
+  net/core/skmsg.c \
+  net/core/sock_map.c \
+  net/core/xdp.c \
+  net/core/bpf_sk_storage.c \
+  net/bpf/test_run.c \
+  net/bpf/Makefile \
+  net/ipv4/tcp_bpf.c \
+  net/ipv4/bpf_tcp_ca.c \
+  kernel/trace/bpf_trace.c \
+  kernel/trace/trace_event_perf.c \
+  arch/arm64/net/bpf_jit_comp.c \
+  security/bpf
+
+# (c) net/core/Makefile: the endpoint builds xdp.o unconditionally and
+#     bpf_sk_storage.o under CONFIG_BPF_SYSCALL (=y).  kernel/bpf/{devmap,
+#     cpumap}.c (restored above) call xdp_return_frame*(), and the endpoint's
+#     include/linux/bpf_types.h references sk_storage_map_ops, so both objects
+#     must exist.  skmsg.o (CONFIG_NET_SOCK_MSG), sock_map.o
+#     (CONFIG_BPF_STREAM_PARSER), lwt_bpf.o (CONFIG_LWTUNNEL_BPF) and
+#     page_pool.o (CONFIG_PAGE_POOL) all stay out: their configs are unset.
+NCM=net/core/Makefile
+if [ -f "$NCM" ]; then
+  if ! grep -qE '(^|[^A-Za-z0-9_])xdp\.o([^A-Za-z0-9_]|$)' "$NCM"; then
+    if grep -qE 'fib_notifier\.o[[:space:]]*$' "$NCM"; then
+      awk '{ if (!done && $0 ~ /fib_notifier\.o[[:space:]]*$/) {
+               sub(/fib_notifier\.o[[:space:]]*$/, "fib_notifier.o xdp.o"); done=1
+             }
+             print }' "$NCM" > "$NCM.tmp"
+      if ! cmp -s "$NCM" "$NCM.tmp"; then
+        echo "fixup: adding xdp.o to $NCM"
+        mv "$NCM.tmp" "$NCM"
+        changed=1
+      else
+        rm -f "$NCM.tmp"
+      fi
+    else
+      echo "::warning::$NCM has no 'fib_notifier.o' line; xdp.o not added"
+    fi
+  fi
+  if ! grep -qE '^obj-\$\(CONFIG_BPF_SYSCALL\)[[:space:]]*\+=[[:space:]]*bpf_sk_storage\.o' "$NCM"; then
+    echo "fixup: adding bpf_sk_storage.o to $NCM"
+    printf '\nobj-$(CONFIG_BPF_SYSCALL) += bpf_sk_storage.o\n' >> "$NCM"
+    changed=1
+  fi
+fi
+
+# (d) net/ipv4/Makefile came out of the merge with the endpoint's obj-y tail
+#     ("metrics.o udp_tunnel_stub.o").  udp_tunnel_stub.c *is* part of the
+#     range, but metrics.c is a pre-range Phoenix file and the endpoint's copy
+#     takes the 5.10 tcp_ca_get_key_by_name(net, ...) API, whose net-namespaced
+#     tcp_cong.c/tcp.h are also pre-range and would drag the whole TCP CA layer
+#     along.  Nothing calls ip_metrics_convert() in this tree, so drop the
+#     object instead of importing the file.
+NIM=net/ipv4/Makefile
+if [ -f "$NIM" ] && [ ! -f net/ipv4/metrics.c ] \
+   && grep -qE '(^|[[:space:]])metrics\.o([[:space:]]|$)' "$NIM"; then
+  sed -i -E 's/(^|[[:space:]])metrics\.o[[:space:]]+udp_tunnel_stub\.o/\1udp_tunnel_stub.o/' "$NIM"
+  if grep -qE '(^|[[:space:]])metrics\.o([[:space:]]|$)' "$NIM"; then
+    echo "::warning::could not drop metrics.o from $NIM"
+  else
+    echo "fixup: dropping the accidentally-imported metrics.o from $NIM"
+    changed=1
+  fi
+fi
+
+# (e) bpf_compute_data_end_sk_skb() lived in the 4.14-only kernel/bpf/sockmap.c
+#     (now removed); the endpoint moved it into include/net/tcp.h next to
+#     TCP_SKB_CB().  The endpoint's net/core/filter.c calls it from
+#     sk_skb_try_make_writable() and the sk_skb adjust-room path, so re-add it
+#     (only bpf.data_end is needed -- the tcp_skb_bpf_* helpers are used by
+#     net/core/skmsg.c and net/core/sock_map.c, which this defconfig does not
+#     build).
+TC=include/net/tcp.h
+if [ -f "$TC" ] && ! grep -q 'bpf_compute_data_end_sk_skb' "$TC"; then
+  echo "fixup: adding bpf_compute_data_end_sk_skb() to $TC"
+  awk '
+    { print }
+    !done && /^#define[ \t]+TCP_SKB_CB\(/ {
+      print ""
+      print "static inline void bpf_compute_data_end_sk_skb(struct sk_buff *skb)"
+      print "{"
+      print "\tTCP_SKB_CB(skb)->bpf.data_end = skb->data + skb_headlen(skb);"
+      print "}"
+      done=1
+    }' "$TC" > "$TC.tmp"
+  mv "$TC.tmp" "$TC"
+  changed=1
+fi
+
+# (f) leftover bpf_compute_data_end() call sites.  The 5.10 helper is
+#     bpf_compute_data_pointers(); \b keeps bpf_compute_data_end_sk_skb out of
+#     it.  Only net/sched/cls_bpf.c is built out of these (act_bpf is off,
+#     lwt_bpf needs CONFIG_LWTUNNEL_BPF, sockmap.c is gone), but rename them
+#     all so a later defconfig cannot resurrect the error.
+mapfile -t legacy_cdata < <(grep -rlE '\bbpf_compute_data_end\b' \
+  --include='*.c' --include='*.h' drivers fs net kernel include 2>/dev/null || true)
+if [ "${#legacy_cdata[@]}" -gt 0 ]; then
+  echo "fixup: renaming bpf_compute_data_end -> bpf_compute_data_pointers in ${#legacy_cdata[@]} file(s)"
+  printf '  %s\n' "${legacy_cdata[@]}"
+  sed -i -E 's/\bbpf_compute_data_end\b/bpf_compute_data_pointers/g' "${legacy_cdata[@]}"
+  changed=1
+fi
+
 # --- merge-artifact scan (report only) -------------------------------------
 # The cherry-pick resolves every conflict with "-X theirs", which can leave a
 # Kbuild file with an orphan or missing conditional; make only ever reports the

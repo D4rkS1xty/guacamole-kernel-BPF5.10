@@ -26,6 +26,8 @@ sed -i -E \
   -e '/^CONFIG_BPF_LSM=/d' \
   -e '/^# CONFIG_BPF_LSM is not set/d' \
   -e '/^CONFIG_BPF_PRELOAD=/d' \
+  -e '/^CONFIG_BPF_PRELOAD_UMD=/d' \
+  -e '/^# CONFIG_BPF_PRELOAD_UMD is not set/d' \
   -e '/^CONFIG_LSM=/d' \
   -e '/^CONFIG_SECURITY_SELINUX_BOOTPARAM=/d' \
   -e '/^# CONFIG_SECURITY_SELINUX_BOOTPARAM is not set/d' \
@@ -58,6 +60,10 @@ CONFIG_PRIME_CPU_MASK=128
 # ---------------------------------------------------------------------------
 CONFIG_BPF_LSM=y
 CONFIG_BPF_PRELOAD=y
+# The preload user-mode driver is a module (kernel/bpf/preload/), and this build
+# only produces arch/arm64/boot/Image.gz, so nothing would be built from it.
+# Pin it off so the defconfig is not sensitive to the Kconfig default.
+# CONFIG_BPF_PRELOAD_UMD is not set
 CONFIG_LSM="lockdown,yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor,bpf"
 
 # SELinux: permissive by default

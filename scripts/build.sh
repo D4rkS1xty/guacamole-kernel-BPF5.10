@@ -35,9 +35,13 @@ export KBUILD_BUILD_USER="${GITHUB_ACTOR:-builder}"
 export KBUILD_BUILD_HOST="github-actions"
 export KBUILD_BUILD_VERSION=1
 
+# -ferror-limit=0: clang normally stops after 20 errors per translation unit,
+# so a broken core header (a lot of this backport is one) hides every later
+# error behind the first twenty copies of the same one.  Report them all.
 MAKE=(make -C "$KDIR" ARCH=arm64
   CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
-  OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip)
+  OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+  KCFLAGS=-ferror-limit=0)
 
 dump_diag() {
   local rc=$?
@@ -56,6 +60,21 @@ dump_diag() {
     tail -n 9 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::error:: $l"; done
   fi
   tail -n 10 "$LOG" 2>/dev/null | while IFS= read -r l; do echo "::warning::tail: $l"; done
+  # A broken header repeats the same diagnostic once per translation unit, so
+  # show the distinct messages with a count instead of 150 copies of one line.
+  echo "::group::distinct compile errors (count, message)"
+  grep -oE '[^ ]+\.(c|h|S):[0-9]+:[0-9]+: (error|fatal error): .*' "$LOG" 2>/dev/null \
+    | sed -E 's/^[^ ]*:[0-9]+:[0-9]+: //' \
+    | sort | uniq -c | sort -rn | head -n 40 || true
+  echo "::endgroup::"
+  {
+    echo ""
+    echo "### Distinct compile errors"
+    echo '```'
+    grep -oE '[^ ]+\.(c|h|S):[0-9]+:[0-9]+: (error|fatal error): .*' "$LOG" 2>/dev/null \
+      | sort -u | head -n 60 || true
+    echo '```'
+  } >> "$SUMMARY"
   {
     echo ""
     echo "### Compile failure: DEFCONFIG=$DEFCONFIG rc=$rc"
