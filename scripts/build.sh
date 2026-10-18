@@ -123,8 +123,30 @@ check_y() {
   fi
 }
 check_y CONFIG_BPF_LSM
-check_y CONFIG_BPF_PRELOAD
 check_y CONFIG_BPF_SYSCALL
+check_y CONFIG_BPF_JIT
+# BPF_PRELOAD stays off on purpose (see apply-defconfig.sh): the only thing it
+# would add is kernel-internal BPF iterators pinned into bpffs, and selecting it
+# pulls in CONFIG_USERMODE_DRIVER -> kernel/usermode_driver.c -> the 5.10
+# call_usermodehelper("struct file *") flow, which this 4.14 base cannot
+# supply.  olddefconfig must not resurrect it.
+check_off() {
+  local sym="$1"
+  if grep -qE "^($sym=y|$sym=m)" "$KDIR/.config"; then
+    echo "::error::$sym is enabled in .config but must stay off"
+    verify_ok=0
+  else
+    echo "OK   $sym off"
+  fi
+}
+check_off CONFIG_BPF_PRELOAD
+check_off CONFIG_USERMODE_DRIVER
+check_off CONFIG_BPFILTER
+# ArrowOS scheduler helpers: kernel/sched/tune.c and kernel/cgroup/cpuset.c use
+# them unconditionally, so losing any of these is a guaranteed compile break.
+check_y CONFIG_STUNE_ASSIST
+check_y CONFIG_CPUSET_ASSIST
+check_y CONFIG_SCHED_CORE_CTL
 echo "CONFIG_LSM value: $(grep '^CONFIG_LSM=' "$KDIR/.config" || echo '<unset>')"
 grep -q '^CONFIG_LSM=' "$KDIR/.config" || { echo "::error::CONFIG_LSM missing"; verify_ok=0; }
 echo "SELinux bootparam: $(grep '^CONFIG_SECURITY_SELINUX_BOOTPARAM' "$KDIR/.config" || echo '<unset>')"

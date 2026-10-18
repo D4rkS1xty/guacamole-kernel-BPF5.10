@@ -698,6 +698,28 @@ fix_ansi_prototypes() {
 }
 fix_ansi_prototypes drivers/input/touchscreen/st techpack/audio drivers/power/supply/qcom
 
+# (g13) Scope two of ArrowOS's -Werror upgrades back to warnings for this
+#       build.  ArrowOS's top-level Makefile promotes -Werror=implicit-int and
+#       -Werror=strict-prototypes (the toolchain supports both, so cc-option
+#       keeps them), and clang 20 diagnoses far more code than the clang 11-14
+#       those flags were added for: plenty of never-touched CAF vendor code
+#       (sound/, drivers/gpu/msm, drivers/net, drivers/media, drivers/staging)
+#       defines functions as "T f()".  Any one of them would fail a build that
+#       ArrowOS itself shipped, and -k only reveals a handful per run.
+#
+#       The warnings themselves stay on, so the log keeps listing every site;
+#       only their ability to abort the build goes away.  The diagnostics that
+#       actually catch merge damage are untouched:
+#         -Werror=incompatible-pointer-types  (type mismatches from hybrids)
+#         -Werror-implicit-function-declaration (missing declarations)
+#         -Werror=designated-init, -Werror=date-time, -Werror=vla
+MK=Makefile
+if [ -f "$MK" ] && ! grep -q -- '-Wno-error=strict-prototypes' "$MK"; then
+  echo "fixup: demoting -Werror={implicit-int,strict-prototypes} to warnings in $MK"
+  perl -0pi -e 's/(KBUILD_CFLAGS\s*\+=\s*\$\(call cc-option,-Werror=designated-init\)\n)/$1\n# ArrowOS-era CAF vendor code predates these clang-20 upgrades; keep the\n# warnings in the log but let the build continue past them.\nKBUILD_CFLAGS   += \$(call cc-option,-Wno-error=strict-prototypes)\nKBUILD_CFLAGS   += \$(call cc-option,-Wno-error=implicit-int)\n/' "$MK"
+  grep -q -- '-Wno-error=strict-prototypes' "$MK" && changed=1
+fi
+
 # --- merge-artifact scan (report only) -------------------------------------
 # The cherry-pick resolves every conflict with "-X theirs", which can leave a
 # Kbuild file with an orphan or missing conditional; make only ever reports the
@@ -835,6 +857,11 @@ if [ "$symlink_bad" -ne 0 ]; then
   vfail=1; echo "::error::a techpack symlink was converted to a regular file"
 else
   echo "ok: techpack symlinks untouched"
+fi
+if grep -q -- '-Wno-error=strict-prototypes' Makefile && grep -q -- '-Wno-error=implicit-int' Makefile; then
+  echo "ok: ArrowOS's strict-prototypes/implicit-int -Werror upgrades demoted"
+else
+  vfail=1; echo "::error::-Wno-error demotion missing from the top-level Makefile"
 fi
 if [ "$vfail" -ne 0 ]; then
   echo "::error::one or more fixups did not apply; refusing to continue with a tree that is known not to build"
